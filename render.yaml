@@ -9,7 +9,9 @@ services:
     plan: starter # always-on (no cold starts), ~$7/mo
     region: singapore # closest Render region to Australia
     branch: main
-    buildCommand: npm ci && npm run build
+    # build:index embeds the whole manifest into data/asset-index.json, which
+    # the running service reads for semantic search. Re-deploy to refresh it.
+    buildCommand: npm ci && npm run build:index && npm run build
     startCommand: npx next start -p $PORT
     healthCheckPath: /
     autoDeploy: true
@@ -18,6 +20,9 @@ services:
         value: "22"
       # Secret — set in the Render dashboard (not committed).
       - key: NOTION_TOKEN
+        sync: false
+      # Secret — embeddings provider key (build-time + query-time).
+      - key: OPENAI_API_KEY
         sync: false
       # The Brand Asset Manifest database.
       - key: NOTION_ASSETS_DATABASE_ID

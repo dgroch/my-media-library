@@ -216,6 +216,52 @@ main {
   word-break: break-word;
 }
 
+.badge {
+  position: absolute;
+  left: 10px;
+  bottom: 42px;
+  z-index: 2;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.6);
+  pointer-events: none;
+}
+
+.placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 28px 18px;
+  min-height: 160px;
+  text-align: center;
+  background: linear-gradient(135deg, #20242e, #171a21);
+}
+
+.placeholder.is-video {
+  background: linear-gradient(135deg, #2a2030, #1a1620);
+}
+
+.placeholder-glyph {
+  font-size: 34px;
+  opacity: 0.8;
+}
+
+.placeholder-desc {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
 .card-overlay {
   position: absolute;
   inset: 0;

@@ -23,6 +23,11 @@ export default function AssetCard({
     .filter(Boolean)
     .join(" ");
 
+  const isVideo = asset.mediaType === "video";
+  const hasImage = Boolean(asset.url);
+  // Where the "open" affordance points: CDN preview first, else the original.
+  const openHref = asset.url || asset.driveLink || "";
+
   return (
     <div
       className={className}
@@ -36,19 +41,38 @@ export default function AssetCard({
         ) : (
           <span />
         )}
-        <a
-          className="open-link"
-          href={asset.url}
-          target="_blank"
-          rel="noreferrer"
-          title="Open full size"
-          onClick={(e) => e.stopPropagation()}
-        >
-          ↗
-        </a>
+        {openHref && (
+          <a
+            className="open-link"
+            href={openHref}
+            target="_blank"
+            rel="noreferrer"
+            title={isVideo ? "Open video" : "Open full size"}
+            onClick={(e) => e.stopPropagation()}
+          >
+            ↗
+          </a>
+        )}
       </div>
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src={asset.url} alt={asset.description || asset.title} loading="lazy" />
+
+      {isVideo && <span className="badge">▶ Video</span>}
+
+      {hasImage ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={asset.url}
+          alt={asset.description || asset.title}
+          loading="lazy"
+        />
+      ) : (
+        <div className={`placeholder ${isVideo ? "is-video" : ""}`}>
+          <div className="placeholder-glyph">{isVideo ? "▶" : "🖼"}</div>
+          {asset.description && (
+            <p className="placeholder-desc">{asset.description}</p>
+          )}
+        </div>
+      )}
+
       <div className="card-caption">{asset.title}</div>
     </div>
   );

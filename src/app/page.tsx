@@ -71,7 +71,7 @@ export default function HomePage() {
           <form className="search-form" onSubmit={onSubmit}>
             <input
               className="search-input"
-              placeholder="Search assets — e.g. pink roses, lifestyle, unboxing…"
+              placeholder="Describe what you want — e.g. cosy autumn bouquet, candid unboxing reel…"
               value={input}
               onChange={(e) => setInput(e.target.value)}
             />
@@ -88,8 +88,8 @@ export default function HomePage() {
             <>
               <h1 className="page-title">Search the asset manifest</h1>
               <p className="page-sub">
-                Find images, select the ones you want, and save a shareable
-                collection.
+                Semantic search across images and video. Describe what you need,
+                select the assets you want, and save a shareable collection.
               </p>
             </>
           )}

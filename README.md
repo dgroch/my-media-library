@@ -11,18 +11,27 @@ Built with **Next.js (App Router) + TypeScript** and the official
 ## How it works
 
 ```
-Browser ──▶ /api/search ──▶ Notion (Manifest data source)  ──▶ masonry grid
+build:index ──▶ Notion (all Manifest rows) ──▶ embed ──▶ data/asset-index.json
+Browser ──▶ /api/search ──▶ embed query ──▶ rank index by meaning ──▶ grid
 Browser ──▶ /api/collections (POST) ──▶ creates a row in the Collections DB
-Anyone  ──▶ /c/<collection-id> ──▶ server-renders the saved assets
+Anyone  ──▶ /c/<collection-id> ──▶ server-renders the saved assets (live Notion)
 ```
 
-- The Notion token lives only on the server (API routes + server components);
-  it is never exposed to the browser.
-- Each asset's image comes from the `Preview URL` property (your Cloudflare
-  Workers CDN). The title comes from the `Asset` property.
-- Search matches your query against the asset's description, visual tags,
-  products, mood, location, etc. (see `searchableTextProps` in
-  `src/lib/config.ts`). Only rows with `Asset Type = image` are returned.
+- **Semantic search.** A build step (`npm run build:index`) reads every row in
+  the Manifest, concatenates its descriptive fields (description, visual tags,
+  products, mood, setting, scene beats, etc. — see `embeddingTextProps` in
+  `src/lib/config.ts`) and embeds them with OpenAI into
+  `data/asset-index.json`. At query time the search box text is embedded and
+  ranked against that index by cosine similarity, so "cosy autumn bouquet"
+  finds the right shots even without exact keyword matches. If no index is
+  present the app falls back to Notion's substring filter.
+- **Images and video.** Media type is derived from the filename (we no longer
+  rely on the often-unset `Asset Type` property, which previously hid assets).
+  Images render from the `Preview URL` CDN. Videos in the Manifest have no
+  public preview image, so they render as a "▶ Video" placeholder card showing
+  the description and linking to the original (Google Drive).
+- The Notion and OpenAI keys live only on the server; never exposed to the
+  browser.
 - Collections are stored as rows in a dedicated **Asset Collections** Notion
   database, each with a relation to the selected Manifest rows. The Notion page
   id of that row _is_ the share URL, so it's a single source of truth you can
@@ -47,6 +56,8 @@ Then edit `.env.local`:
 - `NOTION_TOKEN` — an internal integration token from
   <https://www.notion.so/my-integrations>.
 - `NOTION_ASSETS_DATABASE_ID` — already defaulted to the Brand Asset Manifest.
+- `OPENAI_API_KEY` — for semantic search embeddings
+  (<https://platform.openai.com/api-keys>).
 
 **Important:** in Notion, share the Manifest database (and its parent "Assets"
 page) with your integration so it has read access.
@@ -62,13 +73,27 @@ writes `NOTION_COLLECTIONS_DATABASE_ID` / `NOTION_COLLECTIONS_DATA_SOURCE_ID`
 back into `.env.local`. Because it's created under a page your integration can
 already see, it inherits access automatically.
 
-### 4. Run
+### 4. Build the search index
+
+```bash
+npm run build:index
+```
+
+Embeds every Manifest asset into `data/asset-index.json`. Re-run this whenever
+the Manifest changes (new assets won't appear in search until you do). It's
+cheap — embedding a few thousand assets costs well under a cent.
+
+### 5. Run
 
 ```bash
 npm run dev
 ```
 
 Open <http://localhost:3000>.
+
+> **Refreshing the index in production:** the Render build runs `build:index`
+> automatically on every deploy, so triggering a redeploy (or a Render Cron Job
+> that hits the deploy hook) re-embeds the latest Manifest.
 
 ## Configuration reference
 
@@ -81,6 +106,9 @@ All configurable via environment variables (see `.env.local.example`):
 | `NOTION_ASSETS_DATA_SOURCE_ID`    | Optional; auto-resolved from the database id     |
 | `NOTION_COLLECTIONS_DATABASE_ID`  | Set by `setup:collections`                       |
 | `NOTION_COLLECTIONS_PARENT_PAGE_ID` | Where the Collections DB is created            |
+| `OPENAI_API_KEY`                  | Embeddings key (build-time + query-time secret)  |
+| `EMBEDDING_MODEL` / `EMBEDDING_DIMENSIONS` | Override model (default `text-embedding-3-small`, 512d) |
+| `ASSET_INDEX_PATH`                | Where the index is written/read (default `data/asset-index.json`) |
 | `NOTION_PROP_*`                   | Override property names if the schema changes    |
 
 ## Deploying (Render)
@@ -104,15 +132,17 @@ provision.
 3. When prompted, fill in the secret env vars (these are marked `sync: false`
    so they're never committed):
    - `NOTION_TOKEN`
+   - `OPENAI_API_KEY`
    - `NOTION_COLLECTIONS_DATABASE_ID`
    - `NOTION_COLLECTIONS_DATA_SOURCE_ID`
 
    The non-secret ids (`NOTION_ASSETS_DATABASE_ID`,
    `NOTION_COLLECTIONS_PARENT_PAGE_ID`) are baked into the blueprint.
 
-4. Deploy. Render runs `npm ci && npm run build` and serves with
-   `next start -p $PORT`. `autoDeploy` is on, so pushes to the configured
-   branch redeploy automatically.
+4. Deploy. Render runs `npm ci && npm run build:index && npm run build` (so the
+   embedding index is rebuilt from the latest Manifest on every deploy) and
+   serves with `next start -p $PORT`. `autoDeploy` is on, so pushes to the
+   configured branch redeploy automatically.
 
 The blueprint defaults to the **Singapore** region (closest to Australia) and
 the **Starter** plan (always-on, no cold starts — important so agency share

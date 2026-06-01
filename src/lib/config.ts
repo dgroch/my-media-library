@@ -28,22 +28,54 @@ export const props = {
   imageUrl: process.env.NOTION_PROP_IMAGE_URL ?? "Preview URL",
   description: process.env.NOTION_PROP_DESCRIPTION ?? "Overall Description",
   assetType: process.env.NOTION_PROP_ASSET_TYPE ?? "Asset Type",
+  mimeType: process.env.NOTION_PROP_MIME_TYPE ?? "Mime Type",
+  driveLink: process.env.NOTION_PROP_DRIVE_LINK ?? "Drive Link",
 } as const;
 
-// Rich-text / title properties that a free-text query is matched against.
-// (Select / number / url properties are intentionally excluded because the
-// Notion "contains" filter only applies to text-like properties.)
-export const searchableTextProps = [
-  "Overall Description",
-  "Visual Tags",
-  "Products / Flowers",
-  "Mood Tone",
-  "Setting / Location",
-  "Usable For",
-  "People Present",
-  "Product Name",
-] as const;
+// All the descriptive text properties that carry meaning from the manifest
+// process. These are concatenated into a single document per asset and fed to
+// the embedding model. The label is included so the model gets light structure.
+export const embeddingTextProps: Array<{ label: string; name: string }> = [
+  { label: "Description", name: "Overall Description" },
+  { label: "Tags", name: "Visual Tags" },
+  { label: "Products", name: "Products / Flowers" },
+  { label: "Product name", name: "Product Name" },
+  { label: "Content type", name: "Content Type" },
+  { label: "Mood", name: "Mood Tone" },
+  { label: "Setting", name: "Setting / Location" },
+  { label: "People", name: "People Present" },
+  { label: "Usable for", name: "Usable For" },
+  { label: "Scene beats", name: "Timestamp Beats" },
+  { label: "Notes", name: "Reorg Notes" },
+];
+
+// Used only by the (degraded) Notion substring fallback when no embedding
+// index is available.
+export const searchableTextProps = embeddingTextProps
+  .map((p) => p.name)
+  // The Notion "contains" filter only works on text-like properties; all of
+  // the above are rich_text in the current schema.
+  .filter(Boolean);
 
 // The relation property on the Collections database that links to assets.
 export const COLLECTION_ASSETS_PROP = "Assets";
 export const COLLECTION_NAME_PROP = "Name";
+
+// ---------------------------------------------------------------------------
+// Semantic search (embeddings)
+// ---------------------------------------------------------------------------
+export const embeddingConfig = {
+  apiKey: process.env.OPENAI_API_KEY ?? "",
+  baseUrl: process.env.OPENAI_BASE_URL ?? "https://api.openai.com/v1",
+  model: process.env.EMBEDDING_MODEL ?? "text-embedding-3-small",
+  // Reduced dimensions keep the on-disk index small and search fast with only
+  // a marginal quality cost. `text-embedding-3-*` supports the `dimensions`
+  // parameter natively.
+  dimensions: Number(process.env.EMBEDDING_DIMENSIONS ?? "512"),
+} as const;
+
+// Where `npm run build:index` writes the prebuilt index and where the running
+// app reads it from. Relative to the project working directory.
+export const ASSET_INDEX_PATH =
+  process.env.ASSET_INDEX_PATH ?? "data/asset-index.json";
+

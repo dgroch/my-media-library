@@ -9,6 +9,7 @@ import {
   props,
   searchableTextProps,
 } from "./config";
+import { detectMediaType } from "./media";
 import type { Asset, Collection, SearchResponse } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -95,12 +96,18 @@ function joinRichText(arr: any[]): string {
 
 function pageToAsset(page: any): Asset {
   const p = page.properties ?? {};
+  const title = plainText(p[props.title]) || "Untitled";
   return {
     id: page.id,
-    title: plainText(p[props.title]) || "Untitled",
+    title,
     url: plainText(p[props.imageUrl]),
     description: plainText(p[props.description]),
-    assetType: plainText(p[props.assetType]),
+    driveLink: plainText(p[props.driveLink]),
+    mediaType: detectMediaType(
+      title,
+      plainText(p[props.mimeType]),
+      plainText(p[props.assetType]),
+    ),
   };
 }
 
@@ -109,25 +116,18 @@ function pageToAsset(page: any): Asset {
 // ---------------------------------------------------------------------------
 
 function buildFilter(query: string): any | undefined {
-  const conditions: any[] = [];
-
-  // Only return images (the grid renders images). Videos/other are excluded.
-  conditions.push({
-    property: props.assetType,
-    select: { equals: "image" },
-  });
-
   const terms = query.trim().split(/\s+/).filter(Boolean);
-  for (const term of terms) {
-    const or: any[] = [
+  if (terms.length === 0) return undefined;
+
+  const conditions = terms.map((term) => ({
+    or: [
       { property: props.title, title: { contains: term } },
       ...searchableTextProps.map((name) => ({
         property: name,
         rich_text: { contains: term },
       })),
-    ];
-    conditions.push({ or });
-  }
+    ],
+  }));
 
   if (conditions.length === 1) return conditions[0];
   return { and: conditions };
@@ -146,10 +146,7 @@ export async function searchAssets(
     ...(cursor ? { start_cursor: cursor } : {}),
   })) as any;
 
-  const results: Asset[] = response.results
-    .map(pageToAsset)
-    // Drop rows with no usable image URL — nothing to render.
-    .filter((a: Asset) => a.url);
+  const results: Asset[] = response.results.map(pageToAsset);
 
   return {
     results,
@@ -227,8 +224,7 @@ export async function getCollection(id: string): Promise<Collection | null> {
   );
   const items: Asset[] = settled
     .filter((r): r is PromiseFulfilledResult<any> => r.status === "fulfilled")
-    .map((r) => pageToAsset(r.value))
-    .filter((a) => a.url);
+    .map((r) => pageToAsset(r.value));
 
   return { id, name, items };
 }

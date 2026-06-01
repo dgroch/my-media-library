@@ -22,3 +22,6 @@ npm-debug.log*
 
 # typescript
 *.tsbuildinfo
+
+# generated semantic search index (built by `npm run build:index`)
+/data
