@@ -8,7 +8,7 @@ services:
     runtime: node
     plan: starter # always-on (no cold starts), ~$7/mo
     region: singapore # closest Render region to Australia
-    branch: claude/notion-asset-search-PaNYB
+    branch: main
     buildCommand: npm ci && npm run build
     startCommand: npx next start -p $PORT
     healthCheckPath: /
