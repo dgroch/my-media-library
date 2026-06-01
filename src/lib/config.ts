@@ -30,6 +30,7 @@ export const props = {
   assetType: process.env.NOTION_PROP_ASSET_TYPE ?? "Asset Type",
   mimeType: process.env.NOTION_PROP_MIME_TYPE ?? "Mime Type",
   driveLink: process.env.NOTION_PROP_DRIVE_LINK ?? "Drive Link",
+  driveFileId: process.env.NOTION_PROP_DRIVE_FILE_ID ?? "Drive File ID",
 } as const;
 
 // All the descriptive text properties that carry meaning from the manifest

@@ -9,7 +9,7 @@ import {
   props,
   keywordTextProps,
 } from "./config";
-import { detectMediaType } from "./media";
+import { detectMediaType, resolveImageUrl, resolveOpenLink } from "./media";
 import type { Asset, Collection, SearchResponse } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -97,12 +97,15 @@ function joinRichText(arr: any[]): string {
 function pageToAsset(page: any): Asset {
   const p = page.properties ?? {};
   const title = plainText(p[props.title]) || "Untitled";
+  const previewUrl = plainText(p[props.imageUrl]);
+  const driveFileId = plainText(p[props.driveFileId]);
+  const driveLink = plainText(p[props.driveLink]);
   return {
     id: page.id,
     title,
-    url: plainText(p[props.imageUrl]),
+    url: resolveImageUrl(previewUrl),
     description: plainText(p[props.description]),
-    driveLink: plainText(p[props.driveLink]),
+    driveLink: resolveOpenLink(previewUrl, driveLink, driveFileId),
     mediaType: detectMediaType(
       title,
       plainText(p[props.mimeType]),

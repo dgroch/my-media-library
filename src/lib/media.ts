@@ -53,3 +53,31 @@ export function detectMediaType(
 
   return "other";
 }
+
+/** A human-openable Drive link for a file id. */
+export function driveView(fileId: string): string {
+  if (!fileId) return "";
+  return `https://drive.google.com/file/d/${fileId}/view`;
+}
+
+/**
+ * The image URL to render. Only the public CDN `Preview URL` is usable here —
+ * Drive originals are private (login-gated), so we never point an <img> at
+ * Drive. Assets without a CDN preview render as a placeholder instead.
+ */
+export function resolveImageUrl(previewUrl: string): string {
+  return previewUrl;
+}
+
+/**
+ * The best link to the original asset for the "open" affordance: the public
+ * CDN url if present, else the Drive link / a Drive view link (which may
+ * require the viewer to be signed in to the workspace).
+ */
+export function resolveOpenLink(
+  previewUrl: string,
+  driveLink: string,
+  driveFileId: string,
+): string {
+  return previewUrl || driveLink || driveView(driveFileId);
+}

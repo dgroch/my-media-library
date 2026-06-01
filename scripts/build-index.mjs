@@ -139,12 +139,22 @@ async function fetchAllRows(dataSourceId) {
   return rows;
 }
 
+function driveView(fileId) {
+  return fileId ? `https://drive.google.com/file/d/${fileId}/view` : "";
+}
+
 function toRecord(page) {
   const p = page.properties ?? {};
   const title = plainText(p["Asset"]) || "Untitled";
   const description = plainText(p["Overall Description"]);
-  const url = plainText(p["Preview URL"]);
-  const driveLink = plainText(p["Drive Link"]);
+  const previewUrl = plainText(p["Preview URL"]);
+  const driveFileId = plainText(p["Drive File ID"]);
+  const driveLinkRaw = plainText(p["Drive Link"]);
+  // Only the public CDN preview is renderable as an image; Drive originals are
+  // private. Assets without a CDN preview show a placeholder in the UI.
+  const url = previewUrl;
+  // For the "open" link, prefer the public CDN url, else a Drive link.
+  const driveLink = previewUrl || driveLinkRaw || driveView(driveFileId);
   const mediaType = detectMediaType(
     title,
     plainText(p["Mime Type"]),
