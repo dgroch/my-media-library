@@ -83,8 +83,37 @@ All configurable via environment variables (see `.env.local.example`):
 | `NOTION_COLLECTIONS_PARENT_PAGE_ID` | Where the Collections DB is created            |
 | `NOTION_PROP_*`                   | Override property names if the schema changes    |
 
-## Deploying
+## Deploying (Render)
 
-Deploy to Vercel (or any Node host). Set the same environment variables in the
-host's project settings. The app uses no database of its own — Notion is the
-only backend.
+This repo ships a `render.yaml` blueprint. The app is a stateless Node web
+service — Notion is the only backend, so there's no database or disk to
+provision.
+
+1. **Create the Collections database first** (locally), so you have its ids:
+
+   ```bash
+   npm run setup:collections
+   ```
+
+   Note the `NOTION_COLLECTIONS_DATABASE_ID` /
+   `NOTION_COLLECTIONS_DATA_SOURCE_ID` it prints.
+
+2. In Render: **New + → Blueprint**, point it at this repo. Render reads
+   `render.yaml` and creates an always-on **Starter** web service.
+
+3. When prompted, fill in the secret env vars (these are marked `sync: false`
+   so they're never committed):
+   - `NOTION_TOKEN`
+   - `NOTION_COLLECTIONS_DATABASE_ID`
+   - `NOTION_COLLECTIONS_DATA_SOURCE_ID`
+
+   The non-secret ids (`NOTION_ASSETS_DATABASE_ID`,
+   `NOTION_COLLECTIONS_PARENT_PAGE_ID`) are baked into the blueprint.
+
+4. Deploy. Render runs `npm ci && npm run build` and serves with
+   `next start -p $PORT`. `autoDeploy` is on, so pushes to the configured
+   branch redeploy automatically.
+
+The blueprint defaults to the **Singapore** region (closest to Australia) and
+the **Starter** plan (always-on, no cold starts — important so agency share
+links load instantly). Adjust `region`/`plan` in `render.yaml` if you prefer.

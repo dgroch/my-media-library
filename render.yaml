@@ -1,0 +1,32 @@
+# Render blueprint — https://render.com/docs/blueprint-spec
+# Deploy with: New + > Blueprint, point at this repo, then fill in the
+# secret env vars (NOTION_TOKEN and the NOTION_COLLECTIONS_* ids) in the
+# dashboard when prompted.
+services:
+  - type: web
+    name: asset-library
+    runtime: node
+    plan: starter # always-on (no cold starts), ~$7/mo
+    region: singapore # closest Render region to Australia
+    branch: claude/notion-asset-search-PaNYB
+    buildCommand: npm ci && npm run build
+    startCommand: npx next start -p $PORT
+    healthCheckPath: /
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      # Secret — set in the Render dashboard (not committed).
+      - key: NOTION_TOKEN
+        sync: false
+      # The Brand Asset Manifest database.
+      - key: NOTION_ASSETS_DATABASE_ID
+        value: 357fdc24-425f-81ed-805c-c4f9aff0665f
+      # Collections database — produced by `npm run setup:collections`.
+      # Paste the values it prints into the dashboard.
+      - key: NOTION_COLLECTIONS_DATABASE_ID
+        sync: false
+      - key: NOTION_COLLECTIONS_DATA_SOURCE_ID
+        sync: false
+      - key: NOTION_COLLECTIONS_PARENT_PAGE_ID
+        value: 352fdc24-425f-8088-930c-c5c1ff6afa95
