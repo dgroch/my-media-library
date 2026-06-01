@@ -35,27 +35,33 @@ export const props = {
 // All the descriptive text properties that carry meaning from the manifest
 // process. These are concatenated into a single document per asset and fed to
 // the embedding model. The label is included so the model gets light structure.
-export const embeddingTextProps: Array<{ label: string; name: string }> = [
-  { label: "Description", name: "Overall Description" },
-  { label: "Tags", name: "Visual Tags" },
-  { label: "Products", name: "Products / Flowers" },
-  { label: "Product name", name: "Product Name" },
-  { label: "Content type", name: "Content Type" },
-  { label: "Mood", name: "Mood Tone" },
-  { label: "Setting", name: "Setting / Location" },
-  { label: "People", name: "People Present" },
-  { label: "Usable for", name: "Usable For" },
-  { label: "Scene beats", name: "Timestamp Beats" },
-  { label: "Notes", name: "Reorg Notes" },
+// `type` reflects the Notion property type — it matters for the keyword
+// fallback, where the filter shape differs between rich_text and select.
+type PropType = "rich_text" | "select";
+export const embeddingTextProps: Array<{
+  label: string;
+  name: string;
+  type: PropType;
+}> = [
+  { label: "Description", name: "Overall Description", type: "rich_text" },
+  { label: "Tags", name: "Visual Tags", type: "rich_text" },
+  { label: "Products", name: "Products / Flowers", type: "rich_text" },
+  { label: "Product name", name: "Product Name", type: "rich_text" },
+  { label: "Content type", name: "Content Type", type: "select" },
+  { label: "Mood", name: "Mood Tone", type: "rich_text" },
+  { label: "Setting", name: "Setting / Location", type: "rich_text" },
+  { label: "People", name: "People Present", type: "rich_text" },
+  { label: "Usable for", name: "Usable For", type: "rich_text" },
+  { label: "Scene beats", name: "Timestamp Beats", type: "rich_text" },
+  { label: "Notes", name: "Reorg Notes", type: "rich_text" },
 ];
 
 // Used only by the (degraded) Notion substring fallback when no embedding
-// index is available.
-export const searchableTextProps = embeddingTextProps
-  .map((p) => p.name)
-  // The Notion "contains" filter only works on text-like properties; all of
-  // the above are rich_text in the current schema.
-  .filter(Boolean);
+// index is available. Notion's `contains` text filter only works on rich_text
+// properties, so select properties (e.g. "Content Type") are excluded here.
+export const keywordTextProps = embeddingTextProps
+  .filter((p) => p.type === "rich_text")
+  .map((p) => p.name);
 
 // The relation property on the Collections database that links to assets.
 export const COLLECTION_ASSETS_PROP = "Assets";
@@ -74,8 +80,9 @@ export const embeddingConfig = {
   dimensions: Number(process.env.EMBEDDING_DIMENSIONS ?? "512"),
 } as const;
 
-// Where `npm run build:index` writes the prebuilt index and where the running
-// app reads it from. Relative to the project working directory.
+// Where `npm run build:index` writes the prebuilt index. It lives under src/
+// so it is bundled into the build via a static import (see searchIndex.ts) —
+// this avoids relying on build-time files surviving to runtime on the host.
 export const ASSET_INDEX_PATH =
-  process.env.ASSET_INDEX_PATH ?? "data/asset-index.json";
+  process.env.ASSET_INDEX_PATH ?? "src/data/asset-index.json";
 

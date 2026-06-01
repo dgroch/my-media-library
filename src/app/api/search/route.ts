@@ -13,7 +13,7 @@ export async function GET(request: Request) {
 
   try {
     // Prefer semantic search when a prebuilt index is present.
-    if (await hasIndex()) {
+    if (hasIndex()) {
       try {
         const offset = cursor ? Number(cursor) : 0;
         const data = await semanticSearch(

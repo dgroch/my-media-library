@@ -23,5 +23,7 @@ npm-debug.log*
 # typescript
 *.tsbuildinfo
 
-# generated semantic search index (built by `npm run build:index`)
-/data
+# Note: the generated index lives at src/data/asset-index.json (a committed
+# placeholder that `npm run build:index` overwrites). It is intentionally NOT
+# ignored so it can be bundled into the build via import. Avoid committing the
+# populated (large) version.

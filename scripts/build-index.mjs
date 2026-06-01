@@ -12,7 +12,8 @@ import { Client } from "@notionhq/client";
 
 // --- config (mirrors src/lib/config.ts) ------------------------------------
 const ENV_PATH = ".env.local";
-const OUT_PATH = process.env.ASSET_INDEX_PATH || "data/asset-index.json";
+// Written under src/ so it is bundled into the build via a static import.
+const OUT_PATH = process.env.ASSET_INDEX_PATH || "src/data/asset-index.json";
 
 // Fields concatenated into the embedding document, in priority order.
 const EMBEDDING_TEXT_PROPS = [

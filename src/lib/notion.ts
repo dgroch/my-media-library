@@ -7,7 +7,7 @@ import {
   COLLECTION_NAME_PROP,
   notionConfig,
   props,
-  searchableTextProps,
+  keywordTextProps,
 } from "./config";
 import { detectMediaType } from "./media";
 import type { Asset, Collection, SearchResponse } from "./types";
@@ -122,7 +122,7 @@ function buildFilter(query: string): any | undefined {
   const conditions = terms.map((term) => ({
     or: [
       { property: props.title, title: { contains: term } },
-      ...searchableTextProps.map((name) => ({
+      ...keywordTextProps.map((name) => ({
         property: name,
         rich_text: { contains: term },
       })),
