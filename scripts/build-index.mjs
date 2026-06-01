@@ -6,7 +6,14 @@
 // Run with:  npm run build:index
 // Requires NOTION_TOKEN and OPENAI_API_KEY.
 
-import { readFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import {
+  readFileSync,
+  existsSync,
+  mkdirSync,
+  writeFileSync,
+  createWriteStream,
+  statSync,
+} from "node:fs";
 import { dirname } from "node:path";
 import { Client } from "@notionhq/client";
 
@@ -193,29 +200,51 @@ async function main() {
 
   console.log(`→ Embedding (${model}, ${dimensions}d)…`);
   const BATCH = 128;
-  const assets = [];
+  const VEC_PATH = OUT_PATH.replace(/\.json$/, "") + ".vec.bin";
+  mkdirSync(dirname(OUT_PATH), { recursive: true });
+
+  // Stream vectors to a binary file (little-endian float32) so we never hold
+  // the whole embedding matrix in memory — keeps the build well under 512MB.
+  const vecStream = createWriteStream(VEC_PATH);
+  const meta = [];
+  let done = 0;
+
   for (let i = 0; i < records.length; i += BATCH) {
     const slice = records.slice(i, i + BATCH);
     const vectors = await embedBatch(slice.map((r) => r.text));
     slice.forEach((r, j) => {
-      const { text, ...rest } = r; // drop the raw text from the index
-      assets.push({ ...rest, v: vectors[j] });
+      const vec = Float32Array.from(vectors[j]);
+      if (!vecStream.write(Buffer.from(vec.buffer))) {
+        // Backpressure handled lazily; for our sizes this is fine.
+      }
+      const { text, ...rest } = r; // metadata only — no vector in the JSON
+      meta.push(rest);
     });
-    process.stdout.write(`\r  embedded ${assets.length}/${records.length}…`);
+    done += slice.length;
+    process.stdout.write(`\r  embedded ${done}/${records.length}…`);
   }
   process.stdout.write("\n");
 
-  const out = {
+  await new Promise((resolve, reject) => {
+    vecStream.on("finish", resolve);
+    vecStream.on("error", reject);
+    vecStream.end();
+  });
+
+  const metaOut = {
     model,
     dimensions,
+    count: meta.length,
     builtAt: new Date().toISOString(),
-    assets,
+    assets: meta,
   };
+  writeFileSync(OUT_PATH, JSON.stringify(metaOut));
 
-  mkdirSync(dirname(OUT_PATH), { recursive: true });
-  writeFileSync(OUT_PATH, JSON.stringify(out));
-  const mb = (Buffer.byteLength(JSON.stringify(out)) / 1e6).toFixed(1);
-  console.log(`✓ Wrote ${assets.length} assets to ${OUT_PATH} (${mb} MB)`);
+  const metaMb = (Buffer.byteLength(JSON.stringify(metaOut)) / 1e6).toFixed(1);
+  const vecMb = (statSync(VEC_PATH).size / 1e6).toFixed(1);
+  console.log(
+    `✓ Wrote ${meta.length} assets — meta ${OUT_PATH} (${metaMb} MB), vectors ${VEC_PATH} (${vecMb} MB)`,
+  );
 }
 
 main().catch((err) => {

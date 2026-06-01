@@ -11,7 +11,7 @@ Built with **Next.js (App Router) + TypeScript** and the official
 ## How it works
 
 ```
-build:index ──▶ Notion (all Manifest rows) ──▶ embed ──▶ data/asset-index.json
+build:index ──▶ Notion (all rows) ──▶ embed ──▶ src/data/asset-index.{json,vec.bin}
 Browser ──▶ /api/search ──▶ embed query ──▶ rank index by meaning ──▶ grid
 Browser ──▶ /api/collections (POST) ──▶ creates a row in the Collections DB
 Anyone  ──▶ /c/<collection-id> ──▶ server-renders the saved assets (live Notion)
@@ -21,7 +21,8 @@ Anyone  ──▶ /c/<collection-id> ──▶ server-renders the saved assets (
   the Manifest, concatenates its descriptive fields (description, visual tags,
   products, mood, setting, scene beats, etc. — see `embeddingTextProps` in
   `src/lib/config.ts`) and embeds them with OpenAI into
-  `data/asset-index.json`. At query time the search box text is embedded and
+  `src/data/` (small metadata JSON + a compact binary float32 vector blob). At
+  query time the search box text is embedded and
   ranked against that index by cosine similarity, so "cosy autumn bouquet"
   finds the right shots even without exact keyword matches. If no index is
   present the app falls back to Notion's substring filter.
@@ -79,7 +80,8 @@ already see, it inherits access automatically.
 npm run build:index
 ```
 
-Embeds every Manifest asset into `data/asset-index.json`. Re-run this whenever
+Embeds every Manifest asset into `src/data/asset-index.json` (metadata) and
+`src/data/asset-index.vec.bin` (vectors). Re-run this whenever
 the Manifest changes (new assets won't appear in search until you do). It's
 cheap — embedding a few thousand assets costs well under a cent.
 
@@ -108,7 +110,7 @@ All configurable via environment variables (see `.env.local.example`):
 | `NOTION_COLLECTIONS_PARENT_PAGE_ID` | Where the Collections DB is created            |
 | `OPENAI_API_KEY`                  | Embeddings key (build-time + query-time secret)  |
 | `EMBEDDING_MODEL` / `EMBEDDING_DIMENSIONS` | Override model (default `text-embedding-3-small`, 512d) |
-| `ASSET_INDEX_PATH`                | Where the index is written/read (default `data/asset-index.json`) |
+| `ASSET_INDEX_PATH`                | Metadata index path (default `src/data/asset-index.json`; vectors sit beside it as `.vec.bin`) |
 | `NOTION_PROP_*`                   | Override property names if the schema changes    |
 
 ## Deploying (Render)
@@ -147,3 +149,12 @@ provision.
 The blueprint defaults to the **Singapore** region (closest to Australia) and
 the **Starter** plan (always-on, no cold starts — important so agency share
 links load instantly). Adjust `region`/`plan` in `render.yaml` if you prefer.
+
+### Memory
+
+The Starter instance has 512MB RAM. The search index is held in memory as one
+compact float32 buffer: roughly `assets × EMBEDDING_DIMENSIONS × 4 bytes`
+(e.g. ~10MB for 5,000 assets at 512d), which fits comfortably alongside the
+Next.js runtime. If the Manifest grows very large and you approach the limit,
+either lower `EMBEDDING_DIMENSIONS` (e.g. 256) and rebuild, or bump the Render
+plan to a larger instance.
