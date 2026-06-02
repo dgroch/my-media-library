@@ -146,7 +146,9 @@ export async function searchAssets(
     ...(cursor ? { start_cursor: cursor } : {}),
   })) as any;
 
-  const results: Asset[] = response.results.map(pageToAsset);
+  const results: Asset[] = response.results
+    .filter((page: any) => !page.archived && !page.in_trash)
+    .map(pageToAsset);
 
   return {
     results,

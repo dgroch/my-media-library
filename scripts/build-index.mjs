@@ -145,6 +145,7 @@ function toRecord(page) {
   const description = plainText(p["Overall Description"]);
   const url = plainText(p["Preview URL"]);
   const driveLink = plainText(p["Drive Link"]);
+  const driveFileId = plainText(p["Drive File ID"]);
   const mediaType = detectMediaType(
     title,
     plainText(p["Mime Type"]),
@@ -163,10 +164,42 @@ function toRecord(page) {
     url,
     description,
     driveLink,
+    driveFileId,
     mediaType,
     createdTime: page.created_time ?? "",
+    lastEditedTime: page.last_edited_time ?? "",
     text: lines.join("\n"),
   };
+}
+
+function recordScore(record) {
+  // Prefer canonical rows that can display in the UI. Preview URL is the most
+  // important because the frontend renders <img src={asset.url}> from it.
+  let score = 0;
+  if (record.url) score += 100;
+  if (record.driveLink) score += 10;
+  if (record.description) score += 5;
+  score += Date.parse(record.lastEditedTime || record.createdTime || "") / 1e13 || 0;
+  return score;
+}
+
+function dedupeRecords(records) {
+  const byKey = new Map();
+  const uniqueNoKey = [];
+
+  for (const record of records) {
+    const key = record.driveFileId || `page:${record.id}`;
+    if (!record.driveFileId) {
+      uniqueNoKey.push(record);
+      continue;
+    }
+    const existing = byKey.get(key);
+    if (!existing || recordScore(record) > recordScore(existing)) {
+      byKey.set(key, record);
+    }
+  }
+
+  return [...byKey.values(), ...uniqueNoKey];
 }
 
 async function embedBatch(inputs) {
@@ -195,8 +228,11 @@ async function main() {
 
   console.log("→ Fetching manifest rows…");
   const pages = await fetchAllRows(dataSourceId);
-  const records = pages.map(toRecord);
-  console.log(`  ${records.length} assets total`);
+  const activePages = pages.filter((page) => !page.archived && !page.in_trash);
+  const records = dedupeRecords(activePages.map(toRecord));
+  console.log(
+    `  ${pages.length} rows fetched; ${activePages.length} active; ${records.length} unique assets after Drive File ID dedupe`,
+  );
 
   console.log(`→ Embedding (${model}, ${dimensions}d)…`);
   const BATCH = 128;
