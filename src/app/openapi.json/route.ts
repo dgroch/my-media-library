@@ -205,6 +205,127 @@ export async function GET(request: Request) {
             },
           },
         },
+        patch: {
+          operationId: "renameCollection",
+          summary: "Rename a collection",
+          description:
+            "Updates a collection's name. Requires `Authorization: Bearer " +
+            "<token>` only when the deployment sets API_WRITE_TOKEN.",
+          security: [{ bearerAuth: [] }, {}],
+          parameters: [
+            {
+              name: "id",
+              in: "path",
+              required: true,
+              schema: { type: "string" },
+            },
+          ],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["name"],
+                  properties: {
+                    name: {
+                      type: "string",
+                      description: "The new collection name (non-empty).",
+                    },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            "200": {
+              description: "Collection renamed.",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    required: ["id", "name"],
+                    properties: {
+                      id: { type: "string" },
+                      name: { type: "string" },
+                    },
+                  },
+                },
+              },
+            },
+            "400": {
+              description: "Empty or invalid name.",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/Error" },
+                },
+              },
+            },
+            "401": {
+              description: "Bearer token required but missing.",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/Error" },
+                },
+              },
+            },
+            "403": {
+              description: "Bearer token invalid.",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/Error" },
+                },
+              },
+            },
+          },
+        },
+        delete: {
+          operationId: "deleteCollection",
+          summary: "Delete a collection",
+          description:
+            "Deletes (archives) a collection. The linked assets are not " +
+            "affected. Requires `Authorization: Bearer <token>` only when the " +
+            "deployment sets API_WRITE_TOKEN.",
+          security: [{ bearerAuth: [] }, {}],
+          parameters: [
+            {
+              name: "id",
+              in: "path",
+              required: true,
+              schema: { type: "string" },
+            },
+          ],
+          responses: {
+            "200": {
+              description: "Collection deleted.",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    required: ["ok"],
+                    properties: { ok: { type: "boolean" } },
+                  },
+                },
+              },
+            },
+            "401": {
+              description: "Bearer token required but missing.",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/Error" },
+                },
+              },
+            },
+            "403": {
+              description: "Bearer token invalid.",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/Error" },
+                },
+              },
+            },
+          },
+        },
       },
     },
     components: {

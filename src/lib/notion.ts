@@ -216,6 +216,30 @@ export async function listCollections(
     });
 }
 
+/** Rename a collection (updates its Name title property). */
+export async function renameCollection(
+  id: string,
+  name: string,
+): Promise<void> {
+  await notion().pages.update({
+    page_id: id,
+    properties: {
+      [COLLECTION_NAME_PROP]: {
+        title: [{ text: { content: name } }],
+      },
+    },
+  } as any);
+}
+
+/**
+ * Delete a collection. The Notion API has no hard delete, so we archive the
+ * page; listCollections and getCollection already ignore archived/trashed
+ * pages, so it disappears from the app immediately.
+ */
+export async function deleteCollection(id: string): Promise<void> {
+  await notion().pages.update({ page_id: id, archived: true } as any);
+}
+
 /** Read every related asset id, following pagination if there are > 25. */
 async function relationIds(page: any): Promise<string[]> {
   const prop = page.properties?.[COLLECTION_ASSETS_PROP];

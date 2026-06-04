@@ -7,6 +7,7 @@
   --text-muted: #9aa0ac;
   --accent: #6d8bff;
   --accent-contrast: #ffffff;
+  --danger: #e5484d;
   --radius: 12px;
   --maxw: 1400px;
 }
@@ -149,6 +150,16 @@ button {
   opacity: 0.92;
 }
 
+.btn-danger {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+  color: var(--danger);
+}
+
+.btn-danger:hover {
+  border-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 14%, var(--bg-elevated));
+}
+
 .btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
@@ -272,6 +283,29 @@ main {
 .browser-main-head .page-title,
 .browser-main-head .page-sub {
   word-break: break-word;
+}
+
+.browser-main-head-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.head-actions {
+  display: flex;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.rename-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.rename-row .search-input {
+  flex: 1;
+  min-width: 0;
 }
 
 @media (max-width: 760px) {
