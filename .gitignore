@@ -25,5 +25,7 @@ npm-debug.log*
 
 # Generated search index. The metadata JSON has a committed empty placeholder
 # (src/data/asset-index.json) that `npm run build:index` overwrites; the binary
-# vector blob is generated and never committed.
+# vector blob is generated and never committed. In production both files are
+# produced by the reindex cron job, uploaded to R2, and fetched at build time
+# (npm run fetch:index) — so neither belongs in git.
 /src/data/asset-index.vec.bin

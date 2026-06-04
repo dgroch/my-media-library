@@ -9,9 +9,10 @@ services:
     plan: starter # always-on (no cold starts), ~$7/mo
     region: singapore # closest Render region to Australia
     branch: main
-    # build:index embeds the whole manifest into data/asset-index.json, which
-    # the running service reads for semantic search. Re-deploy to refresh it.
-    buildCommand: npm ci && npm run build:index && npm run build
+    # The app deploy no longer re-embeds the manifest. fetch:index pulls the
+    # prebuilt index from R2 (built+uploaded by the asset-index-reindex cron
+    # job below); it is non-fatal, so deploys never depend on OpenAI/Notion.
+    buildCommand: npm ci && npm run fetch:index && npm run build
     startCommand: npx next start -p $PORT
     healthCheckPath: /
     autoDeploy: true
@@ -21,7 +22,7 @@ services:
       # Secret — set in the Render dashboard (not committed).
       - key: NOTION_TOKEN
         sync: false
-      # Secret — embeddings provider key (build-time + query-time).
+      # Secret — embeddings provider key (query-time embeddings for search).
       - key: OPENAI_API_KEY
         sync: false
       # The Brand Asset Manifest database.
@@ -35,3 +36,48 @@ services:
         sync: false
       - key: NOTION_COLLECTIONS_PARENT_PAGE_ID
         value: 352fdc24-425f-8088-930c-c5c1ff6afa95
+      # R2 (read) — where the prebuilt index is fetched from at build time.
+      # A read-only R2 token is sufficient here. Set in the dashboard.
+      - key: R2_ACCOUNT_ID
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET
+        sync: false
+
+  # Re-index job: rebuilds the semantic search index and uploads it to R2 on a
+  # schedule, fully independent of app deploys. Runs build:index (which now
+  # retries rate limits and paces batches) then upload:index, then pings the
+  # web service's deploy hook to publish the refreshed index.
+  - type: cron
+    name: asset-index-reindex
+    runtime: node
+    plan: starter
+    region: singapore
+    branch: main
+    schedule: "0 18 * * *" # daily at 18:00 UTC (~04:00 AEST); adjust as needed
+    buildCommand: npm ci
+    startCommand: npm run reindex
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NOTION_TOKEN
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: NOTION_ASSETS_DATABASE_ID
+        value: 357fdc24-425f-81ed-805c-c4f9aff0665f
+      # R2 (write) — destination bucket for the uploaded index.
+      - key: R2_ACCOUNT_ID
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET
+        sync: false
+      # Web service deploy hook — pinged after upload so the new index goes live.
+      - key: RENDER_DEPLOY_HOOK_URL
+        sync: false

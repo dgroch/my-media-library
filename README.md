@@ -128,9 +128,13 @@ npm run dev
 
 Open <http://localhost:3000>.
 
-> **Refreshing the index in production:** the Render build runs `build:index`
-> automatically on every deploy, so triggering a redeploy (or a Render Cron Job
-> that hits the deploy hook) re-embeds the latest Manifest.
+> **Refreshing the index in production:** re-indexing is decoupled from app
+> deploys. A **Render Cron Job** runs `npm run reindex` on a schedule
+> (`build:index` → upload to Cloudflare R2 → ping the web service's deploy
+> hook). App deploys themselves only run `fetch:index` to download the
+> prebuilt index from R2 — they never re-embed, so a deploy can't be broken by
+> an embeddings rate limit. To refresh on demand, trigger the cron job (or run
+> `npm run reindex` locally with the R2 env vars set).
 
 ## Configuration reference
 
@@ -147,6 +151,10 @@ All configurable via environment variables (see `.env.local.example`):
 | `API_WRITE_TOKEN`                 | Optional; when set, requires a bearer token on `POST /api/collections` |
 | `EMBEDDING_MODEL` / `EMBEDDING_DIMENSIONS` | Override model (default `text-embedding-3-small`, 512d) |
 | `ASSET_INDEX_PATH`                | Metadata index path (default `src/data/asset-index.json`; vectors sit beside it as `.vec.bin`) |
+| `R2_ACCOUNT_ID` / `R2_BUCKET`     | Cloudflare R2 account + bucket holding the prebuilt index |
+| `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` | R2 S3 API token (read-only for the web service, read/write for the cron job) |
+| `R2_ENDPOINT` / `R2_REGION` / `R2_INDEX_PREFIX` | Optional R2 overrides (default endpoint from account id, region `auto`, no key prefix) |
+| `RENDER_DEPLOY_HOOK_URL`          | Cron job only — web service deploy hook, pinged after a re-index |
 | `NOTION_PROP_*`                   | Override property names if the schema changes    |
 
 ## Deploying (Render)
@@ -173,14 +181,30 @@ provision.
    - `OPENAI_API_KEY`
    - `NOTION_COLLECTIONS_DATABASE_ID`
    - `NOTION_COLLECTIONS_DATA_SOURCE_ID`
+   - `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`
+     (the web service can use a **read-only** R2 token; the cron job needs a
+     read/write one)
+   - `RENDER_DEPLOY_HOOK_URL` (cron job only — the web service's deploy hook,
+     so a fresh index goes live automatically after re-index)
 
    The non-secret ids (`NOTION_ASSETS_DATABASE_ID`,
    `NOTION_COLLECTIONS_PARENT_PAGE_ID`) are baked into the blueprint.
 
-4. Deploy. Render runs `npm ci && npm run build:index && npm run build` (so the
-   embedding index is rebuilt from the latest Manifest on every deploy) and
-   serves with `next start -p $PORT`. `autoDeploy` is on, so pushes to the
-   configured branch redeploy automatically.
+4. Deploy. Render runs `npm ci && npm run fetch:index && npm run build` — the
+   prebuilt index is downloaded from R2 (non-fatal if absent), then the app is
+   built and served with `next start -p $PORT`. `autoDeploy` is on, so pushes
+   to the configured branch redeploy automatically.
+
+5. The blueprint also creates an **`asset-index-reindex` cron job** that
+   rebuilds the index and uploads it to R2 on a schedule (default daily at
+   18:00 UTC; edit `schedule` in `render.yaml`). This is the only thing that
+   talks to OpenAI/Notion for embeddings, and it retries rate limits with
+   backoff so a transient `429` no longer fails anything.
+
+> **First-time setup:** create the R2 bucket and an R2 API token in Cloudflare
+> before the first deploy, then run the cron job once (Render dashboard →
+> **Manual Run**) so the index exists in R2. Until then, search returns empty
+> results (the app still builds and runs fine).
 
 The blueprint defaults to the **Singapore** region (closest to Australia) and
 the **Starter** plan (always-on, no cold starts — important so agency share
