@@ -34,6 +34,14 @@ export default async function CollectionPage({ params }: PageProps) {
           <Link href="/" className="brand">
             Asset<span>Library</span>
           </Link>
+          <nav className="nav">
+            <Link href="/" className="nav-link">
+              Search
+            </Link>
+            <Link href="/collections" className="nav-link">
+              Collections
+            </Link>
+          </nav>
         </div>
       </header>
 

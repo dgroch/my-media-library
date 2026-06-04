@@ -68,6 +68,9 @@ export default function HomePage() {
           <Link href="/" className="brand">
             Asset<span>Library</span>
           </Link>
+          <Link href="/collections" className="nav-link">
+            Collections
+          </Link>
           <form className="search-form" onSubmit={onSubmit}>
             <input
               className="search-input"
