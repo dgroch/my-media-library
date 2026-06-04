@@ -37,6 +37,9 @@ const EMBEDDING_TEXT_PROPS = [
   ["Notes", "Reorg Notes"],
 ];
 
+const NOTION_QUERY_CAP = 10000;
+let globalFetchCount = 0;
+
 // --- tiny .env loader -------------------------------------------------------
 function loadEnv(path) {
   if (!existsSync(path)) return {};
@@ -65,6 +68,10 @@ const openaiKey = env.OPENAI_API_KEY;
 const baseUrl = env.OPENAI_BASE_URL || "https://api.openai.com/v1";
 const model = env.EMBEDDING_MODEL || "text-embedding-3-small";
 const dimensions = Number(env.EMBEDDING_DIMENSIONS || "512");
+const notionMaxRetries = Number(env.NOTION_MAX_RETRIES || "6");
+const embeddingMaxRetries = Number(env.EMBEDDING_MAX_RETRIES || "8");
+const embeddingBatchSize = Number(env.EMBEDDING_BATCH_SIZE || "64");
+const embeddingThrottleMs = Number(env.EMBEDDING_THROTTLE_MS || "250");
 const assetsDatabaseId =
   env.NOTION_ASSETS_DATABASE_ID || "357fdc24-425f-81ed-805c-c4f9aff0665f";
 let assetsDataSourceId = env.NOTION_ASSETS_DATA_SOURCE_ID || "";
@@ -79,6 +86,66 @@ if (!openaiKey) {
 }
 
 const notion = new Client({ auth: token });
+
+// --- retry helpers -----------------------------------------------------------
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function jitter(ms) {
+  return Math.round(ms * (0.75 + Math.random() * 0.5));
+}
+
+function retryAfterMs(headers) {
+  const raw = headers?.get?.("retry-after");
+  if (!raw) return undefined;
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
+  const dateMs = Date.parse(raw);
+  if (Number.isFinite(dateMs)) return Math.max(0, dateMs - Date.now());
+  return undefined;
+}
+
+function notionStatus(err) {
+  return err?.status || err?.code || err?.body?.status;
+}
+
+function isRetriableNotionError(err) {
+  const status = notionStatus(err);
+  return (
+    status === 429 ||
+    status === 500 ||
+    status === 502 ||
+    status === 503 ||
+    status === 504 ||
+    err?.code === "ECONNRESET" ||
+    err?.code === "ETIMEDOUT" ||
+    err?.code === "ENOTFOUND"
+  );
+}
+
+function isRetriableEmbeddingStatus(status) {
+  return status === 408 || status === 409 || status === 429 || status >= 500;
+}
+
+async function withRetry(label, fn, { maxRetries, baseDelayMs = 1000 } = {}) {
+  let lastErr;
+  for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    try {
+      return await fn(attempt);
+    } catch (err) {
+      lastErr = err;
+      const canRetry = err?.retriable !== false;
+      if (!canRetry || attempt === maxRetries) break;
+      const delay = jitter(err?.retryAfterMs ?? baseDelayMs * 2 ** attempt);
+      process.stdout.write(
+        `\n  ${label} failed (${err?.status || err?.code || err?.message}); retry ${attempt + 1}/${maxRetries} in ${Math.round(delay)}ms…`,
+      );
+      await sleep(delay);
+    }
+  }
+  throw lastErr;
+}
 
 // --- property helpers -------------------------------------------------------
 function plainText(prop) {
@@ -115,27 +182,115 @@ function detectMediaType(filename, mime, assetType) {
 // --- main -------------------------------------------------------------------
 async function resolveDataSource() {
   if (assetsDataSourceId) return assetsDataSourceId;
-  const db = await notion.databases.retrieve({ database_id: assetsDatabaseId });
+  const db = await withRetry(
+    "notion database retrieve",
+    async () => {
+      try {
+        return await notion.databases.retrieve({ database_id: assetsDatabaseId });
+      } catch (err) {
+        err.retriable = isRetriableNotionError(err);
+        throw err;
+      }
+    },
+    { maxRetries: notionMaxRetries, baseDelayMs: 1000 },
+  );
   const id = db.data_sources?.[0]?.id;
   if (!id) throw new Error("No data source found on assets database");
   assetsDataSourceId = id;
   return id;
 }
 
+async function queryDataSource(dataSourceId, body) {
+  return withRetry(
+    "notion data source query",
+    async () => {
+      try {
+        return await notion.dataSources.query({ data_source_id: dataSourceId, ...body });
+      } catch (err) {
+        err.retriable = isRetriableNotionError(err);
+        throw err;
+      }
+    },
+    { maxRetries: notionMaxRetries, baseDelayMs: 1000 },
+  );
+}
+
 async function fetchAllRows(dataSourceId) {
+  const oldest = await edgeCreatedTime(dataSourceId, "ascending");
+  const newest = await edgeCreatedTime(dataSourceId, "descending");
+  if (!oldest || !newest) return [];
+
+  globalFetchCount = 0;
+  const rows = [];
+  for (const [start, end] of monthRanges(oldest, newest)) {
+    rows.push(...(await fetchRowsInCreatedRange(dataSourceId, start, end)));
+  }
+  process.stdout.write("\n");
+  return rows;
+}
+
+async function edgeCreatedTime(dataSourceId, direction) {
+  const res = await queryDataSource(dataSourceId, {
+    page_size: 1,
+    sorts: [{ timestamp: "created_time", direction }],
+  });
+  return res.results[0]?.created_time;
+}
+
+function monthRanges(oldest, newest) {
+  const start = new Date(oldest);
+  const final = new Date(newest);
+  const cursor = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), 1));
+  const ranges = [];
+  while (cursor <= final) {
+    const next = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth() + 1, 1));
+    ranges.push([cursor.toISOString(), next.toISOString()]);
+    cursor.setUTCMonth(cursor.getUTCMonth() + 1);
+  }
+  return ranges;
+}
+
+function createdTimeRangeFilter(start, end) {
+  return {
+    and: [
+      { timestamp: "created_time", created_time: { on_or_after: start } },
+      { timestamp: "created_time", created_time: { before: end } },
+    ],
+  };
+}
+
+async function fetchRowsInCreatedRange(dataSourceId, start, end, depth = 0) {
   const rows = [];
   let cursor;
   do {
-    const res = await notion.dataSources.query({
-      data_source_id: dataSourceId,
+    const res = await queryDataSource(dataSourceId, {
       page_size: 100,
+      filter: createdTimeRangeFilter(start, end),
       ...(cursor ? { start_cursor: cursor } : {}),
     });
     rows.push(...res.results);
     cursor = res.has_more ? res.next_cursor : undefined;
-    process.stdout.write(`\r  fetched ${rows.length} rows…`);
+    process.stdout.write(
+      `\r  fetched ${rows.length} rows in ${start.slice(0, 10)}..${end.slice(0, 10)}; total ${globalFetchCount + rows.length}…`,
+    );
+    if (rows.length >= NOTION_QUERY_CAP && cursor) {
+      const startMs = Date.parse(start);
+      const endMs = Date.parse(end);
+      if (depth >= 12 || endMs - startMs <= 60 * 60 * 1000) {
+        throw new Error(
+          `Notion query cap reached for ${start}..${end}; narrow the shard further`,
+        );
+      }
+      const mid = new Date(startMs + (endMs - startMs) / 2).toISOString();
+      console.warn(
+        `\n⚠ Notion returned ${NOTION_QUERY_CAP} rows for ${start.slice(0, 10)}..${end.slice(0, 10)}; splitting shard.`,
+      );
+      const left = await fetchRowsInCreatedRange(dataSourceId, start, mid, depth + 1);
+      const right = await fetchRowsInCreatedRange(dataSourceId, mid, end, depth + 1);
+      return [...left, ...right];
+    }
   } while (cursor);
-  process.stdout.write("\n");
+  globalFetchCount += rows.length;
   return rows;
 }
 
@@ -202,63 +357,38 @@ function dedupeRecords(records) {
   return [...byKey.values(), ...uniqueNoKey];
 }
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-// How long to wait before retrying a rate-limited / transient failure. Prefer
-// the server's own guidance (Retry-After header, or OpenAI's "try again in Xs"
-// hint in the body), then fall back to exponential backoff with jitter.
-function retryDelayMs(res, body, attempt) {
-  const header = res.headers.get("retry-after");
-  if (header) {
-    const secs = Number(header);
-    if (Number.isFinite(secs)) return Math.max(secs * 1000, 1000);
-  }
-  const hint = /try again in ([\d.]+)\s*(ms|s)\b/i.exec(body || "");
-  if (hint) {
-    const v = Number(hint[1]);
-    const ms = hint[2].toLowerCase() === "ms" ? v : v * 1000;
-    if (Number.isFinite(ms)) return Math.max(ms + 250, 1000); // small cushion
-  }
-  // 2s, 4s, 8s, … capped at 30s, plus jitter to avoid thundering-herd retries.
-  return Math.min(2000 * 2 ** attempt, 30000) + Math.floor(Math.random() * 500);
-}
-
-const MAX_EMBED_RETRIES = Number(env.EMBED_MAX_RETRIES || "8");
-
 async function embedBatch(inputs) {
-  for (let attempt = 0; ; attempt++) {
-    const res = await fetch(`${baseUrl}/embeddings`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${openaiKey}`,
-      },
-      body: JSON.stringify({ model, input: inputs, dimensions }),
-    });
-
-    if (res.ok) {
-      const json = await res.json();
-      // Preserve input order regardless of the response ordering.
-      return json.data
-        .slice()
-        .sort((a, b) => a.index - b.index)
-        .map((d) => d.embedding);
-    }
-
-    const body = await res.text();
-    // 429 (rate limit) and 5xx (transient server errors) are worth retrying;
-    // 4xx like 400/401 are not — fail fast on those.
-    const retryable = res.status === 429 || res.status >= 500;
-    if (!retryable || attempt >= MAX_EMBED_RETRIES) {
-      throw new Error(`Embedding request failed (${res.status}): ${body}`);
-    }
-
-    const delay = retryDelayMs(res, body, attempt);
-    process.stdout.write(
-      `\r  ${res.status} from embeddings; retry ${attempt + 1}/${MAX_EMBED_RETRIES} in ${(delay / 1000).toFixed(1)}s…          `,
-    );
-    await sleep(delay);
-  }
+  const res = await withRetry(
+    "embedding request",
+    async () => {
+      const response = await fetch(`${baseUrl}/embeddings`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${openaiKey}`,
+        },
+        body: JSON.stringify({ model, input: inputs, dimensions }),
+      });
+      if (!response.ok) {
+        const detail = await response.text();
+        const err = new Error(
+          `Embedding request failed (${response.status}): ${detail}`,
+        );
+        err.status = response.status;
+        err.retryAfterMs = retryAfterMs(response.headers);
+        err.retriable = isRetriableEmbeddingStatus(response.status);
+        throw err;
+      }
+      return response;
+    },
+    { maxRetries: embeddingMaxRetries, baseDelayMs: 1500 },
+  );
+  const json = await res.json();
+  // Preserve input order regardless of the response ordering.
+  return json.data
+    .slice()
+    .sort((a, b) => a.index - b.index)
+    .map((d) => d.embedding);
 }
 
 async function main() {
@@ -274,11 +404,7 @@ async function main() {
   );
 
   console.log(`→ Embedding (${model}, ${dimensions}d)…`);
-  const BATCH = 128;
-  // Pace batches to stay under OpenAI's tokens-per-minute limit. A full 128-row
-  // batch is ~1s of budget against the 1M TPM tier, so ~1.1s between batches
-  // keeps us safely under it; override with EMBED_PACE_MS if your tier differs.
-  const PACE_MS = Number(env.EMBED_PACE_MS || "1100");
+  const BATCH = embeddingBatchSize;
   const VEC_PATH = OUT_PATH.replace(/\.json$/, "") + ".vec.bin";
   mkdirSync(dirname(OUT_PATH), { recursive: true });
 
@@ -300,8 +426,10 @@ async function main() {
       meta.push(rest);
     });
     done += slice.length;
-    process.stdout.write(`\r  embedded ${done}/${records.length}…          `);
-    if (PACE_MS > 0 && i + BATCH < records.length) await sleep(PACE_MS);
+    process.stdout.write(`\r  embedded ${done}/${records.length}…`);
+    if (embeddingThrottleMs > 0 && done < records.length) {
+      await sleep(embeddingThrottleMs);
+    }
   }
   process.stdout.write("\n");
 

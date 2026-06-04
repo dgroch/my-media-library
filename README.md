@@ -134,7 +134,10 @@ Open <http://localhost:3000>.
 > hook). App deploys themselves only run `fetch:index` to download the
 > prebuilt index from R2 — they never re-embed, so a deploy can't be broken by
 > an embeddings rate limit. To refresh on demand, trigger the cron job (or run
-> `npm run reindex` locally with the R2 env vars set).
+> `npm run reindex` locally with the R2 env vars set). The Notion data source
+> query endpoint caps a single query at 10,000 results, so `build:index` shards
+> Manifest reads by `created_time` month and recursively splits any shard that
+> still hits the cap.
 
 ## Configuration reference
 
@@ -150,6 +153,10 @@ All configurable via environment variables (see `.env.local.example`):
 | `OPENAI_API_KEY`                  | Embeddings key (build-time + query-time secret)  |
 | `API_WRITE_TOKEN`                 | Optional; when set, requires a bearer token on `POST /api/collections` |
 | `EMBEDDING_MODEL` / `EMBEDDING_DIMENSIONS` | Override model (default `text-embedding-3-small`, 512d) |
+| `EMBEDDING_BATCH_SIZE`            | Build-time embedding batch size (default `64`)   |
+| `EMBEDDING_THROTTLE_MS`           | Delay between embedding batches to avoid TPM limits (default `250`) |
+| `EMBEDDING_MAX_RETRIES`           | Retries for transient embedding failures such as 429/5xx (default `8`) |
+| `NOTION_MAX_RETRIES`              | Retries for transient Notion API failures such as 429/502/503/504 (default `6`) |
 | `ASSET_INDEX_PATH`                | Metadata index path (default `src/data/asset-index.json`; vectors sit beside it as `.vec.bin`) |
 | `R2_ACCOUNT_ID` / `R2_BUCKET`     | Cloudflare R2 account + bucket holding the prebuilt index |
 | `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` | R2 S3 API token (read-only for the web service, read/write for the cron job) |
