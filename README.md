@@ -14,7 +14,9 @@ Built with **Next.js (App Router) + TypeScript** and the official
 build:index ──▶ Notion (all rows) ──▶ embed ──▶ src/data/asset-index.{json,vec.bin}
 Browser ──▶ /api/search ──▶ embed query ──▶ rank index by meaning ──▶ grid
 Browser ──▶ /api/collections (POST) ──▶ creates a row in the Collections DB
+Browser ──▶ /collections ──▶ lists saved collections (GET /api/collections)
 Anyone  ──▶ /c/<collection-id> ──▶ server-renders the saved assets (live Notion)
+Agents  ──▶ /openapi.json ──▶ discover + call the JSON API above
 ```
 
 - **Semantic search.** A build step (`npm run build:index`) reads every row in
@@ -37,6 +39,39 @@ Anyone  ──▶ /c/<collection-id> ──▶ server-renders the saved assets (
   database, each with a relation to the selected Manifest rows. The Notion page
   id of that row _is_ the share URL, so it's a single source of truth you can
   also browse inside Notion.
+
+## API
+
+The app exposes a small JSON API that other services — Claude tool use, an
+agent, a cron job — can call directly. A machine-readable **OpenAPI 3.1** spec
+is served at **`/openapi.json`**, so most agent frameworks can import the tools
+without hand-written schemas.
+
+| Endpoint                 | Method | Body / Query                       | Returns                              | Auth |
+| ------------------------ | ------ | ---------------------------------- | ------------------------------------ | ---- |
+| `/api/search`            | GET    | `?q=<text>&cursor=<opaque>`        | `{ results: Asset[], nextCursor }`   | none |
+| `/api/collections`       | GET    | —                                  | `{ collections: CollectionSummary[] }` | none |
+| `/api/collections`       | POST   | `{ name?, assetIds: string[] }`    | `{ id }` (share at `/c/{id}`)        | optional¹ |
+| `/api/collections/{id}`  | GET    | —                                  | `{ id, name, items: Asset[] }`       | none |
+| `/c/{id}`                | GET    | —                                  | server-rendered HTML share page      | none |
+| `/openapi.json`          | GET    | —                                  | the OpenAPI 3.1 description          | none |
+
+`Asset` is `{ id, title, url, description, mediaType, driveLink }`. An empty
+`q` returns the most recent assets. Example:
+
+```bash
+curl "https://<host>/api/search?q=cosy%20autumn%20bouquet"
+curl -X POST "https://<host>/api/collections" \
+  -H 'content-type: application/json' \
+  -d '{"name":"Spring campaign","assetIds":["<asset-id>","<asset-id>"]}'
+```
+
+¹ **Write auth is opt-in.** By default `POST /api/collections` is open, so the
+no-login browser "Save collection" button works. Set `API_WRITE_TOKEN` in the
+environment to require `Authorization: Bearer <token>` on that endpoint (for
+deployments that expose the API to automation and want writes private). Reads
+are always public. Note that enabling the token disables the in-browser save
+button, since the browser has nowhere safe to hold the secret.
 
 ## Setup
 
@@ -109,6 +144,7 @@ All configurable via environment variables (see `.env.local.example`):
 | `NOTION_COLLECTIONS_DATABASE_ID`  | Set by `setup:collections`                       |
 | `NOTION_COLLECTIONS_PARENT_PAGE_ID` | Where the Collections DB is created            |
 | `OPENAI_API_KEY`                  | Embeddings key (build-time + query-time secret)  |
+| `API_WRITE_TOKEN`                 | Optional; when set, requires a bearer token on `POST /api/collections` |
 | `EMBEDDING_MODEL` / `EMBEDDING_DIMENSIONS` | Override model (default `text-embedding-3-small`, 512d) |
 | `ASSET_INDEX_PATH`                | Metadata index path (default `src/data/asset-index.json`; vectors sit beside it as `.vec.bin`) |
 | `NOTION_PROP_*`                   | Override property names if the schema changes    |

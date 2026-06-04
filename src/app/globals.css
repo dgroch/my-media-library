@@ -73,6 +73,33 @@ button {
   color: var(--accent);
 }
 
+.nav {
+  display: flex;
+  gap: 6px;
+}
+
+.nav-link {
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-decoration: none;
+  white-space: nowrap;
+  transition:
+    color 0.15s ease,
+    background 0.15s ease;
+}
+
+.nav-link:hover {
+  color: var(--text);
+  background: var(--bg-elevated);
+}
+
+.nav-link.active {
+  color: var(--text);
+}
+
 .search-form {
   flex: 1;
   display: flex;
@@ -156,6 +183,49 @@ main {
   border-color: #5a2730;
   background: #2a181b;
   color: #ffb4b4;
+}
+
+/* ---- Collections index -------------------------------------------------- */
+
+.collection-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 16px;
+}
+
+.collection-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  height: 100%;
+  padding: 18px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  text-decoration: none;
+  transition:
+    border-color 0.15s ease,
+    transform 0.15s ease;
+}
+
+.collection-card:hover {
+  border-color: var(--accent);
+  transform: translateY(-2px);
+}
+
+.collection-name {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+  word-break: break-word;
+}
+
+.collection-meta {
+  font-size: 13px;
+  color: var(--text-muted);
 }
 
 /* ---- Masonry ------------------------------------------------------------ */

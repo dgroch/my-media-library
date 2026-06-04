@@ -10,7 +10,12 @@ import {
   keywordTextProps,
 } from "./config";
 import { detectMediaType } from "./media";
-import type { Asset, Collection, SearchResponse } from "./types";
+import type {
+  Asset,
+  Collection,
+  CollectionSummary,
+  SearchResponse,
+} from "./types";
 
 // ---------------------------------------------------------------------------
 // Client
@@ -178,6 +183,37 @@ export async function createCollection(
   } as any)) as any;
 
   return { id: page.id };
+}
+
+/**
+ * List saved collections, newest first. Returns lightweight summaries (name +
+ * asset count) without fetching the linked asset rows, so it stays cheap even
+ * with many collections. `assetCount` reflects the relations returned on the
+ * first page (Notion caps relation arrays at 25); `partialCount` flags when
+ * there are more.
+ */
+export async function listCollections(
+  limit = 100,
+): Promise<CollectionSummary[]> {
+  const response = (await notion().dataSources.query({
+    data_source_id: await collectionsDataSourceId(),
+    sorts: [{ timestamp: "created_time", direction: "descending" }],
+    page_size: Math.min(limit, 100),
+  })) as any;
+
+  return response.results
+    .filter((page: any) => !page.archived && !page.in_trash)
+    .map((page: any): CollectionSummary => {
+      const rel = page.properties?.[COLLECTION_ASSETS_PROP];
+      const relations = rel?.type === "relation" ? rel.relation : [];
+      return {
+        id: page.id,
+        name: plainText(page.properties?.[COLLECTION_NAME_PROP]) || "Collection",
+        assetCount: relations.length,
+        partialCount: Boolean(rel?.has_more),
+        createdTime: page.created_time ?? "",
+      };
+    });
 }
 
 /** Read every related asset id, following pagination if there are > 25. */

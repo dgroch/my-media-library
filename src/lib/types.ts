@@ -31,3 +31,15 @@ export interface Collection {
   name: string;
   items: Asset[];
 }
+
+/** Lightweight collection metadata for list/index views (no asset rows). */
+export interface CollectionSummary {
+  id: string;
+  name: string;
+  /** Number of linked assets. Capped/partial when `partialCount` is true. */
+  assetCount: number;
+  /** True when the real count exceeds what a single query page returned. */
+  partialCount: boolean;
+  /** ISO timestamp the collection row was created in Notion. */
+  createdTime: string;
+}
