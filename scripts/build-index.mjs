@@ -202,24 +202,63 @@ function dedupeRecords(records) {
   return [...byKey.values(), ...uniqueNoKey];
 }
 
-async function embedBatch(inputs) {
-  const res = await fetch(`${baseUrl}/embeddings`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${openaiKey}`,
-    },
-    body: JSON.stringify({ model, input: inputs, dimensions }),
-  });
-  if (!res.ok) {
-    throw new Error(`Embedding request failed (${res.status}): ${await res.text()}`);
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// How long to wait before retrying a rate-limited / transient failure. Prefer
+// the server's own guidance (Retry-After header, or OpenAI's "try again in Xs"
+// hint in the body), then fall back to exponential backoff with jitter.
+function retryDelayMs(res, body, attempt) {
+  const header = res.headers.get("retry-after");
+  if (header) {
+    const secs = Number(header);
+    if (Number.isFinite(secs)) return Math.max(secs * 1000, 1000);
   }
-  const json = await res.json();
-  // Preserve input order regardless of the response ordering.
-  return json.data
-    .slice()
-    .sort((a, b) => a.index - b.index)
-    .map((d) => d.embedding);
+  const hint = /try again in ([\d.]+)\s*(ms|s)\b/i.exec(body || "");
+  if (hint) {
+    const v = Number(hint[1]);
+    const ms = hint[2].toLowerCase() === "ms" ? v : v * 1000;
+    if (Number.isFinite(ms)) return Math.max(ms + 250, 1000); // small cushion
+  }
+  // 2s, 4s, 8s, … capped at 30s, plus jitter to avoid thundering-herd retries.
+  return Math.min(2000 * 2 ** attempt, 30000) + Math.floor(Math.random() * 500);
+}
+
+const MAX_EMBED_RETRIES = Number(env.EMBED_MAX_RETRIES || "8");
+
+async function embedBatch(inputs) {
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetch(`${baseUrl}/embeddings`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${openaiKey}`,
+      },
+      body: JSON.stringify({ model, input: inputs, dimensions }),
+    });
+
+    if (res.ok) {
+      const json = await res.json();
+      // Preserve input order regardless of the response ordering.
+      return json.data
+        .slice()
+        .sort((a, b) => a.index - b.index)
+        .map((d) => d.embedding);
+    }
+
+    const body = await res.text();
+    // 429 (rate limit) and 5xx (transient server errors) are worth retrying;
+    // 4xx like 400/401 are not — fail fast on those.
+    const retryable = res.status === 429 || res.status >= 500;
+    if (!retryable || attempt >= MAX_EMBED_RETRIES) {
+      throw new Error(`Embedding request failed (${res.status}): ${body}`);
+    }
+
+    const delay = retryDelayMs(res, body, attempt);
+    process.stdout.write(
+      `\r  ${res.status} from embeddings; retry ${attempt + 1}/${MAX_EMBED_RETRIES} in ${(delay / 1000).toFixed(1)}s…          `,
+    );
+    await sleep(delay);
+  }
 }
 
 async function main() {
@@ -236,6 +275,10 @@ async function main() {
 
   console.log(`→ Embedding (${model}, ${dimensions}d)…`);
   const BATCH = 128;
+  // Pace batches to stay under OpenAI's tokens-per-minute limit. A full 128-row
+  // batch is ~1s of budget against the 1M TPM tier, so ~1.1s between batches
+  // keeps us safely under it; override with EMBED_PACE_MS if your tier differs.
+  const PACE_MS = Number(env.EMBED_PACE_MS || "1100");
   const VEC_PATH = OUT_PATH.replace(/\.json$/, "") + ".vec.bin";
   mkdirSync(dirname(OUT_PATH), { recursive: true });
 
@@ -257,7 +300,8 @@ async function main() {
       meta.push(rest);
     });
     done += slice.length;
-    process.stdout.write(`\r  embedded ${done}/${records.length}…`);
+    process.stdout.write(`\r  embedded ${done}/${records.length}…          `);
+    if (PACE_MS > 0 && i + BATCH < records.length) await sleep(PACE_MS);
   }
   process.stdout.write("\n");
 
