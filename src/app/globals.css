@@ -185,47 +185,110 @@ main {
   color: #ffb4b4;
 }
 
-/* ---- Collections index -------------------------------------------------- */
+/* ---- Collections browser (master-detail) -------------------------------- */
 
-.collection-grid {
+.browser {
+  display: flex;
+  align-items: flex-start;
+  gap: 24px;
+}
+
+.browser-aside {
+  position: sticky;
+  top: 80px;
+  flex: 0 0 300px;
+  width: 300px;
+  max-height: calc(100vh - 100px);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.browser-count {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.collection-list {
   list-style: none;
   margin: 0;
   padding: 0;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: 16px;
-}
-
-.collection-card {
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  height: 100%;
-  padding: 18px;
+  gap: 6px;
+  outline: none;
+}
+
+.collection-list-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  text-align: left;
+  padding: 12px 14px;
   border-radius: var(--radius);
   border: 1px solid var(--border);
   background: var(--bg-card);
-  text-decoration: none;
+  color: var(--text);
   transition:
     border-color 0.15s ease,
-    transform 0.15s ease;
+    background 0.15s ease;
 }
 
-.collection-card:hover {
+.collection-list-item:hover {
   border-color: var(--accent);
-  transform: translateY(-2px);
 }
 
-.collection-name {
-  font-size: 16px;
+.collection-list-item.active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, var(--bg-card));
+}
+
+.collection-list-name {
+  font-size: 14px;
   font-weight: 600;
-  color: var(--text);
   word-break: break-word;
 }
 
-.collection-meta {
-  font-size: 13px;
+.collection-list-meta {
+  font-size: 12px;
   color: var(--text-muted);
+}
+
+.browser-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.browser-main-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.browser-main-head .page-title,
+.browser-main-head .page-sub {
+  word-break: break-word;
+}
+
+@media (max-width: 760px) {
+  .browser {
+    flex-direction: column;
+  }
+
+  .browser-aside {
+    position: static;
+    flex-basis: auto;
+    width: 100%;
+    max-height: none;
+  }
+
+  .collection-list {
+    max-height: 320px;
+  }
 }
 
 /* ---- Masonry ------------------------------------------------------------ */
