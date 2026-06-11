@@ -184,6 +184,99 @@ export async function GET(request: Request) {
           },
         },
       },
+      "/api/derived/{namespace}/{name}": {
+        put: {
+          operationId: "putDerivedObject",
+          summary: "Store a derived object (render cache tier)",
+          description:
+            "Content-addressed CDN storage for objects derived from brand assets " +
+            "— e.g. the social builder's render cache " +
+            "(PUT /api/derived/render/{hash}.png with the raw bytes as the body). " +
+            "Idempotent: re-PUTting an existing key is a no-op 200. Derived " +
+            "objects are NOT brand assets: no manifest row, no dedup, no AI " +
+            "enrichment, and they never appear in /api/search. Eviction is left " +
+            "to a bucket lifecycle rule — a cold miss just re-renders.",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            {
+              name: "namespace",
+              in: "path",
+              required: true,
+              description: "Object namespace, e.g. `render`.",
+              schema: { type: "string", pattern: "^[a-z0-9][a-z0-9_-]*$" },
+            },
+            {
+              name: "name",
+              in: "path",
+              required: true,
+              description:
+                "Content-addressed filename with extension, e.g. `<sha256>.png`.",
+              schema: {
+                type: "string",
+                pattern: "^[a-z0-9][a-z0-9_-]*\\.[a-z0-9]{2,5}$",
+              },
+            },
+          ],
+          requestBody: {
+            required: true,
+            content: {
+              "application/octet-stream": {
+                schema: { type: "string", format: "binary" },
+              },
+            },
+          },
+          responses: {
+            "201": {
+              description: "Object stored.",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/DerivedObject" },
+                },
+              },
+            },
+            "200": {
+              description: "Already existed — no-op.",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/DerivedObject" },
+                },
+              },
+            },
+            "400": {
+              description: "Invalid path or empty body.",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/Error" },
+                },
+              },
+            },
+            "401": {
+              description: "Bearer token missing.",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/Error" },
+                },
+              },
+            },
+            "403": {
+              description: "Bearer token invalid.",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/Error" },
+                },
+              },
+            },
+            "413": {
+              description: "Object too large.",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/Error" },
+                },
+              },
+            },
+          },
+        },
+      },
       "/api/assets/{id}": {
         get: {
           operationId: "getAsset",
@@ -783,6 +876,22 @@ export async function GET(request: Request) {
               },
             },
           ],
+        },
+        DerivedObject: {
+          type: "object",
+          required: ["key", "existed"],
+          properties: {
+            key: { type: "string", description: "Storage key in the bucket." },
+            url: {
+              type: "string",
+              description:
+                "Public CDN URL (present when ASSET_DERIVED_CDN_BASE_URL is configured).",
+            },
+            existed: {
+              type: "boolean",
+              description: "True when the PUT was an idempotent no-op.",
+            },
+          },
         },
         Error: {
           type: "object",

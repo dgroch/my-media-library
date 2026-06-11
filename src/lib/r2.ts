@@ -2,9 +2,10 @@ import "server-only";
 
 // Minimal Cloudflare R2 (S3-compatible) client for the upload path, signed
 // with Node's built-in crypto — a runtime TypeScript port of
-// scripts/lib-r2.mjs (which stays .mjs for the index cron job). Only PUT is
-// needed at runtime: uploaded originals are written once and then served by
-// the brand CDN worker, never read back through the API process.
+// scripts/lib-r2.mjs (which stays .mjs for the index cron job). Only PUT and
+// HEAD are needed at runtime: objects are written once (HEAD makes derived
+// PUTs idempotent) and then served by the brand CDN worker, never read back
+// through the API process.
 
 import { createHash, createHmac } from "node:crypto";
 
@@ -53,19 +54,40 @@ export async function r2PutObject(
   body: Buffer,
   { contentType, cacheControl }: { contentType: string; cacheControl?: string },
 ): Promise<Response> {
+  return r2Request(cfg, "PUT", key, { body, contentType, cacheControl });
+}
+
+/** HEAD an object — 200 when it exists, 404 otherwise. */
+export async function r2HeadObject(
+  cfg: R2Config,
+  key: string,
+): Promise<Response> {
+  return r2Request(cfg, "HEAD", key, {});
+}
+
+async function r2Request(
+  cfg: R2Config,
+  method: "PUT" | "HEAD",
+  key: string,
+  {
+    body,
+    contentType,
+    cacheControl,
+  }: { body?: Buffer; contentType?: string; cacheControl?: string },
+): Promise<Response> {
   const url = new URL(`${cfg.endpoint}/${cfg.bucket}/${key}`);
   const now = new Date();
   const date = amzDate(now);
   const dateStamp = date.slice(0, 8);
   const service = "s3";
-  const payloadHash = sha256hex(body);
+  const payloadHash = body ? sha256hex(body) : sha256hex("");
 
   const headers: Record<string, string> = {
     host: url.host,
     "x-amz-content-sha256": payloadHash,
     "x-amz-date": date,
-    "content-type": contentType,
   };
+  if (contentType) headers["content-type"] = contentType;
   if (cacheControl) headers["cache-control"] = cacheControl;
 
   const names = Object.keys(headers)
@@ -79,7 +101,7 @@ export async function r2PutObject(
     .join("/");
 
   const canonicalRequest = [
-    "PUT",
+    method,
     canonicalUri,
     "", // no query string
     canonicalHeaders,
@@ -108,8 +130,8 @@ export async function r2PutObject(
     `SignedHeaders=${signedHeaders}, Signature=${signature}`;
 
   return fetch(url, {
-    method: "PUT",
+    method,
     headers: { ...headers, Authorization: authorization },
-    body: new Uint8Array(body),
+    ...(body ? { body: new Uint8Array(body) } : {}),
   });
 }

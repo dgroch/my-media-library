@@ -45,6 +45,10 @@ services:
       # https://cdn.example.com/figandbloom/asset-manifest (no trailing slash).
       - key: ASSET_CDN_BASE_URL
         sync: false
+      # Optional: public base URL for derived objects (PUT /api/derived, the
+      # render cache tier). Leave empty to omit `url` from PUT responses.
+      - key: ASSET_DERIVED_CDN_BASE_URL
+        sync: false
       # R2 — the prebuilt index is fetched from here at build time, and
       # uploaded originals are PUT here at runtime. A read-only token works if
       # uploads are disabled; uploads need a read/WRITE token.

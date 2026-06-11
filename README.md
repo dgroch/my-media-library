@@ -57,6 +57,7 @@ without hand-written schemas.
 | `/api/assets`            | POST   | multipart: `file` + metadata       | `201` manifest entry / `200` deduped | bearer² |
 | `/api/assets/{id}`       | GET    | —                                  | full manifest entry incl. status     | none |
 | `/api/assets/{id}`       | PATCH  | `{ context?, people?, … }`         | the updated manifest entry           | bearer² |
+| `/api/derived/{ns}/{name}` | PUT  | raw bytes                          | `{ key, url?, existed }`             | bearer² |
 | `/api/collections`       | GET    | —                                  | `{ collections: CollectionSummary[] }` | none |
 | `/api/collections`       | POST   | `{ name?, assetIds: string[] }`    | `{ id }` (share at `/c/{id}`)        | optional¹ |
 | `/api/collections/{id}`  | GET    | —                                  | `{ id, name, items: Asset[] }`       | none |
@@ -141,6 +142,29 @@ finds a fresh upload within seconds. The nightly re-index then folds them into
 the prebuilt index permanently. Each entry carries `status`:
 `ready` (searchable) or `processing` (indexed keyword-only until the next
 re-index, e.g. if the embedding call failed).
+
+### Derived objects (render cache tier)
+
+`PUT /api/derived/<namespace>/<name>.<ext>` stores **objects derived from
+brand assets** — e.g. the social builder's content-addressed render cache —
+on the CDN, so warm thumbnails serve from the edge even while the app server
+is asleep, and the cache survives deploys:
+
+```bash
+curl -X PUT "https://<host>/api/derived/render/<sha256>.png" \
+  -H "Authorization: Bearer $ASSET_LIBRARY_TOKEN" \
+  --data-binary @render.png
+```
+
+Derived objects are **not brand assets**: they live under a separate prefix
+(`derived/`, override with `ASSET_DERIVED_PREFIX`), get no manifest row, no
+dedup, no AI enrichment, and can never appear in `/api/search` — a rendered
+post containing a photo of Kellie must not become a search hit for "Kellie".
+PUTs are idempotent (the key is the caller's content hash): re-PUTting an
+existing key is a no-op `200 { existed: true }`. Objects are stored with
+immutable cache-control; eviction belongs to an R2 lifecycle rule (e.g.
+delete after 90 days untouched) — a cold miss just re-renders. Set
+`ASSET_DERIVED_CDN_BASE_URL` to have responses include the public `url`.
 
 ## Setup
 
@@ -237,6 +261,8 @@ All configurable via environment variables (see `.env.local.example`):
 | `ASSET_R2_BUCKET`                 | Bucket for uploaded originals (default: `R2_BUCKET`) |
 | `ASSET_MAX_BYTES`                 | Upload size limit (default 25 MB) |
 | `ASSET_SIMILAR_DISTANCE`          | pHash Hamming distance counted as "similar" (default 6) |
+| `ASSET_DERIVED_PREFIX`            | R2 key prefix for derived objects (default `derived/`) |
+| `ASSET_DERIVED_CDN_BASE_URL`      | Optional public CDN base URL for derived objects (adds `url` to PUT responses) |
 | `EMBEDDING_MODEL` / `EMBEDDING_DIMENSIONS` | Override model (default `text-embedding-3-small`, 512d) |
 | `ASSET_INDEX_PATH`                | Metadata index path (default `src/data/asset-index.json`; vectors sit beside it as `.vec.bin`) |
 | `R2_ACCOUNT_ID` / `R2_BUCKET`     | Cloudflare R2 account + bucket holding the prebuilt index |

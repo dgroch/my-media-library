@@ -116,6 +116,16 @@ export const uploadConfig = {
   maxBytes: Number(process.env.ASSET_MAX_BYTES ?? 25 * 1024 * 1024),
   // pHash Hamming distance at or under which two images count as "similar".
   similarDistance: Number(process.env.ASSET_SIMILAR_DISTANCE ?? "6"),
+  // Derived objects (render cache etc.): a separate CDN namespace, outside
+  // the manifest — never indexed, deduped or enriched. See PUT /api/derived.
+  derivedPrefix: process.env.ASSET_DERIVED_PREFIX ?? "derived/",
+  // Optional public base URL the CDN serves the derived prefix from, e.g.
+  // https://cdn.example.com/derived (no trailing slash). When set, PUT
+  // responses include the public `url`.
+  derivedCdnBaseUrl: (process.env.ASSET_DERIVED_CDN_BASE_URL ?? "").replace(
+    /\/+$/,
+    "",
+  ),
 } as const;
 
 // The relation property on the Collections database that links to assets.
