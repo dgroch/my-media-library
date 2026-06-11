@@ -22,7 +22,19 @@ const ENV_PATH = ".env.local";
 // Written under src/ so it is bundled into the build via a static import.
 const OUT_PATH = process.env.ASSET_INDEX_PATH || "src/data/asset-index.json";
 
-// Fields concatenated into the embedding document, in priority order.
+// Human-channel fields (the upload path's metadata, created by
+// `npm run setup:upload`). These lead the embedding document — human context
+// beats the AI classifier, so "Kellie tying stems" matches even though the
+// classifier only saw "florist in black apron".
+const HUMAN_TEXT_PROPS = [
+  ["Context", "Context"],
+  ["Product", "Product"],
+  ["Location", "Location"],
+  ["Shoot", "Shoot"],
+  ["Tags", "Tags"],
+];
+
+// AI-channel fields concatenated after the human context, in priority order.
 const EMBEDDING_TEXT_PROPS = [
   ["Description", "Overall Description"],
   ["Tags", "Visual Tags"],
@@ -139,6 +151,35 @@ async function fetchAllRows(dataSourceId) {
   return rows;
 }
 
+// The "People" property stores a JSON array like
+// [{"name":"Kellie","consent":true}]; fall back to comma-separated names if
+// someone hand-edited it in Notion.
+function parsePeopleNames(raw) {
+  if (!raw.trim()) return [];
+  try {
+    const arr = JSON.parse(raw);
+    if (Array.isArray(arr)) {
+      return arr.map((person) => person?.name).filter(Boolean);
+    }
+  } catch {
+    // not JSON — treat as a plain list
+  }
+  return raw
+    .split(/[,;]+/)
+    .map((name) => name.trim())
+    .filter(Boolean);
+}
+
+function readTags(prop) {
+  if (prop?.type === "multi_select") {
+    return (prop.multi_select || []).map((s) => s.name).filter(Boolean);
+  }
+  return plainText(prop)
+    .split(/[,;]+/)
+    .map((t) => t.trim())
+    .filter(Boolean);
+}
+
 function toRecord(page) {
   const p = page.properties ?? {};
   const title = plainText(p["Asset"]) || "Untitled";
@@ -152,7 +193,23 @@ function toRecord(page) {
     plainText(p["Asset Type"]),
   );
 
+  // Human channel — leads the embedding text and is carried in the metadata
+  // for direct keyword boosting (people/product) at query time.
+  const context = plainText(p["Context"]);
+  const people = parsePeopleNames(plainText(p["People"]));
+  const product = plainText(p["Product"]);
+  const location = plainText(p["Location"]);
+  const tags = readTags(p["Tags"]);
+  const phash = plainText(p["pHash"]);
+
   const lines = [title];
+  if (context) lines.push(`Context: ${context}`);
+  if (people.length) lines.push(`People: ${people.join(", ")}`);
+  for (const [label, name] of HUMAN_TEXT_PROPS) {
+    if (name === "Context") continue; // already added first
+    const v = name === "Tags" ? tags.join(", ") : plainText(p[name]);
+    if (v) lines.push(`${label}: ${v}`);
+  }
   for (const [label, name] of EMBEDDING_TEXT_PROPS) {
     const v = plainText(p[name]);
     if (v) lines.push(`${label}: ${v}`);
@@ -166,6 +223,12 @@ function toRecord(page) {
     driveLink,
     driveFileId,
     mediaType,
+    context,
+    people,
+    product,
+    location,
+    tags,
+    phash,
     createdTime: page.created_time ?? "",
     lastEditedTime: page.last_edited_time ?? "",
     text: lines.join("\n"),
@@ -297,6 +360,12 @@ async function main() {
         // Backpressure handled lazily; for our sizes this is fine.
       }
       const { text, ...rest } = r; // metadata only — no vector in the JSON
+      // Drop empty human-channel fields so the meta file doesn't bloat for
+      // the (initially vast) majority of rows without them.
+      for (const key of ["context", "people", "product", "location", "tags", "phash"]) {
+        const v = rest[key];
+        if (v === "" || (Array.isArray(v) && v.length === 0)) delete rest[key];
+      }
       meta.push(rest);
     });
     done += slice.length;

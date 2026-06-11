@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "next lint",
     "setup:collections": "node scripts/setup-collections.mjs",
+    "setup:upload": "node scripts/setup-upload.mjs",
     "build:index": "node scripts/build-index.mjs",
     "upload:index": "node scripts/upload-index.mjs",
     "fetch:index": "node scripts/fetch-index.mjs",
@@ -15,9 +16,11 @@
   },
   "dependencies": {
     "@notionhq/client": "^5.22.0",
+    "heic-convert": "^2.1.0",
     "next": "^16.2.6",
     "react": "^19.2.6",
-    "react-dom": "^19.2.6"
+    "react-dom": "^19.2.6",
+    "sharp": "^0.34.5"
   },
   "devDependencies": {
     "@types/node": "^22",

@@ -5,6 +5,7 @@ import { Client } from "@notionhq/client";
 import {
   COLLECTION_ASSETS_PROP,
   COLLECTION_NAME_PROP,
+  humanKeywordProps,
   notionConfig,
   props,
   keywordTextProps,
@@ -65,6 +66,30 @@ async function assetsDataSourceId(): Promise<string> {
   return cachedAssetsDataSourceId;
 }
 
+// Shared with the asset upload path (src/lib/assets.ts).
+export { notion as notionClient, assetsDataSourceId };
+
+// ---------------------------------------------------------------------------
+// Manifest schema (property name → type), cached per process. Lets writes and
+// keyword filters adapt to what actually exists — the upload-path properties
+// only appear after `npm run setup:upload`.
+// ---------------------------------------------------------------------------
+
+let cachedManifestSchema: Map<string, string> | null = null;
+
+export async function manifestSchema(): Promise<Map<string, string>> {
+  if (cachedManifestSchema) return cachedManifestSchema;
+  const ds = (await notion().dataSources.retrieve({
+    data_source_id: await assetsDataSourceId(),
+  })) as unknown as { properties?: Record<string, { type: string }> };
+  const map = new Map<string, string>();
+  for (const [name, def] of Object.entries(ds.properties ?? {})) {
+    map.set(name, def.type);
+  }
+  cachedManifestSchema = map;
+  return map;
+}
+
 async function collectionsDataSourceId(): Promise<string> {
   if (!cachedCollectionsDataSourceId) {
     if (!notionConfig.collectionsDatabaseId) {
@@ -85,7 +110,7 @@ async function collectionsDataSourceId(): Promise<string> {
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-function plainText(prop: any): string {
+export function plainText(prop: any): string {
   if (!prop) return "";
   if (prop.type === "title") return joinRichText(prop.title);
   if (prop.type === "rich_text") return joinRichText(prop.rich_text);
@@ -120,14 +145,27 @@ function pageToAsset(page: any): Asset {
 // Search
 // ---------------------------------------------------------------------------
 
-function buildFilter(query: string): any | undefined {
+async function buildFilter(query: string): Promise<any | undefined> {
   const terms = query.trim().split(/\s+/).filter(Boolean);
   if (terms.length === 0) return undefined;
+
+  // Only filter on rich_text properties that actually exist — the human
+  // upload-path props are absent until `npm run setup:upload` has run, and
+  // Notion rejects filters on unknown properties.
+  let textProps = keywordTextProps;
+  try {
+    const schema = await manifestSchema();
+    textProps = [...keywordTextProps, ...humanKeywordProps].filter(
+      (name) => schema.get(name) === "rich_text",
+    );
+  } catch {
+    // Schema lookup failed — fall back to the long-standing AI-channel props.
+  }
 
   const conditions = terms.map((term) => ({
     or: [
       { property: props.title, title: { contains: term } },
-      ...keywordTextProps.map((name) => ({
+      ...textProps.map((name) => ({
         property: name,
         rich_text: { contains: term },
       })),
@@ -145,7 +183,7 @@ export async function searchAssets(
 ): Promise<SearchResponse> {
   const response = (await notion().dataSources.query({
     data_source_id: await assetsDataSourceId(),
-    filter: buildFilter(query),
+    filter: await buildFilter(query),
     sorts: [{ timestamp: "created_time", direction: "descending" }],
     page_size: pageSize,
     ...(cursor ? { start_cursor: cursor } : {}),
