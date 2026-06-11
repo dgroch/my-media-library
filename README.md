@@ -13,10 +13,14 @@ Built with **Next.js (App Router) + TypeScript** and the official
 ```
 build:index ──▶ Notion (all rows) ──▶ embed ──▶ src/data/asset-index.{json,vec.bin}
 Browser ──▶ /api/search ──▶ embed query ──▶ rank index by meaning ──▶ grid
+Apps    ──▶ /api/assets (POST) ──▶ dedup ──▶ R2 (CDN) + Manifest row ──▶ searchable in seconds
+Anyone¹ ──▶ /api/assets/<id> (PATCH) ──▶ backfill human context ──▶ re-embedded
 Browser ──▶ /api/collections (POST) ──▶ creates a row in the Collections DB
 Browser ──▶ /collections ──▶ lists saved collections (GET /api/collections)
 Anyone  ──▶ /c/<collection-id> ──▶ server-renders the saved assets (live Notion)
 Agents  ──▶ /openapi.json ──▶ discover + call the JSON API above
+
+¹ with the ASSET_LIBRARY_TOKEN bearer token
 ```
 
 - **Semantic search.** A build step (`npm run build:index`) reads every row in
@@ -50,6 +54,10 @@ without hand-written schemas.
 | Endpoint                 | Method | Body / Query                       | Returns                              | Auth |
 | ------------------------ | ------ | ---------------------------------- | ------------------------------------ | ---- |
 | `/api/search`            | GET    | `?q=<text>&cursor=<opaque>`        | `{ results: Asset[], nextCursor }`   | none |
+| `/api/assets`            | POST   | multipart: `file` + metadata       | `201` manifest entry / `200` deduped | bearer² |
+| `/api/assets/{id}`       | GET    | —                                  | full manifest entry incl. status     | none |
+| `/api/assets/{id}`       | PATCH  | `{ context?, people?, … }`         | the updated manifest entry           | bearer² |
+| `/api/derived/{ns}/{name}` | PUT  | raw bytes                          | `{ key, url?, existed }`             | bearer² |
 | `/api/collections`       | GET    | —                                  | `{ collections: CollectionSummary[] }` | none |
 | `/api/collections`       | POST   | `{ name?, assetIds: string[] }`    | `{ id }` (share at `/c/{id}`)        | optional¹ |
 | `/api/collections/{id}`  | GET    | —                                  | `{ id, name, items: Asset[] }`       | none |
@@ -72,6 +80,91 @@ environment to require `Authorization: Bearer <token>` on that endpoint (for
 deployments that expose the API to automation and want writes private). Reads
 are always public. Note that enabling the token disables the in-browser save
 button, since the browser has nowhere safe to hold the secret.
+
+² **Asset writes are never open.** `POST /api/assets` and `PATCH
+/api/assets/{id}` require `Authorization: Bearer <ASSET_LIBRARY_TOKEN>` and
+return 503 until that variable is set. Browser clients never hold the token —
+consumer apps (e.g. the social builder) proxy uploads through their own
+servers, the same way they already proxy search.
+
+## Uploading assets
+
+`POST /api/assets` is how images enter the library from anywhere — a file
+picker in the social builder, the brand-photographer skill, or any agent with
+plain HTTP. The response carries a **permanent CDN URL** that is searchable
+within seconds.
+
+```bash
+curl -X POST "https://<host>/api/assets" \
+  -H "Authorization: Bearer $ASSET_LIBRARY_TOKEN" \
+  -F file=@photo.jpg \
+  -F context="Kellie tying the morning's stems, Melbourne studio, June shoot" \
+  -F 'people=[{"name":"Kellie","consent":true}]' \
+  -F product=Osaka -F location="Melbourne studio" -F source=social-builder
+```
+
+Accepted: jpeg / png / webp / heic (HEIC is transcoded to JPEG), max 25 MB.
+Optional metadata fields: `context`, `people` (JSON, with per-person consent),
+`product`, `location`, `shoot`, `credit`, `rights`
+(`internal`/`licensed`/`restricted`), `tags` (JSON array), `source`,
+`uploaded_by`, `on_similar` (`accept`/`reject`).
+
+- **Exact dedup (hard guarantee).** The SHA-256 of the original bytes is
+  stored on every entry. Re-uploading the same file — any filename — returns
+  `200 { deduped: true, asset }` with the same asset id; the submitted context
+  is **merged** in (freeform context appended, people/tags unioned, scalars
+  filled only if empty). A re-upload is a context contribution, not an error.
+- **Near-duplicates (advisory).** A 64-bit perceptual hash catches re-exports,
+  resizes, light crops and format conversions. By default the upload succeeds
+  and the response lists matches under `similar: [{id, url, distance}]` so the
+  client can offer "use the existing one instead?". Send `on_similar=reject`
+  to get a `409` with the matches instead (for agents that should defer to
+  existing assets).
+- **Human context beats the classifier.** The human fields are stored verbatim
+  in their own Notion properties, lead the embedding text, and are never
+  touched by AI enrichment (which owns `Overall Description`). A query naming
+  a person or product also boosts those assets directly, not just via
+  embedding similarity.
+- **Backfill.** `PATCH /api/assets/{id}` accepts the same metadata fields
+  (no file): add `{"people":[{"name":"Kellie"}]}` to a years-old Drive-synced
+  asset and it becomes findable by "Kellie". The entry is re-embedded on
+  change.
+- **Permanent serving.** Originals are stored at full resolution in R2 under a
+  content-addressed key derived from the human context
+  (`kellie-tying-stems-melbourne-studio-2lq873.jpg`) with
+  `cache-control: public, max-age=31536000, immutable` — never preview-style
+  URLs that expire. Renditions (`?w=640|1080|1600|2048`) are the CDN worker's
+  job; the API stores the original so no new asset inherits a size cap.
+
+Uploaded assets are inserted into the in-process search index immediately
+(embedded on the spot, human-context first), so `GET /api/search?q=Kellie`
+finds a fresh upload within seconds. The nightly re-index then folds them into
+the prebuilt index permanently. Each entry carries `status`:
+`ready` (searchable) or `processing` (indexed keyword-only until the next
+re-index, e.g. if the embedding call failed).
+
+### Derived objects (render cache tier)
+
+`PUT /api/derived/<namespace>/<name>.<ext>` stores **objects derived from
+brand assets** — e.g. the social builder's content-addressed render cache —
+on the CDN, so warm thumbnails serve from the edge even while the app server
+is asleep, and the cache survives deploys:
+
+```bash
+curl -X PUT "https://<host>/api/derived/render/<sha256>.png" \
+  -H "Authorization: Bearer $ASSET_LIBRARY_TOKEN" \
+  --data-binary @render.png
+```
+
+Derived objects are **not brand assets**: they live under a separate prefix
+(`derived/`, override with `ASSET_DERIVED_PREFIX`), get no manifest row, no
+dedup, no AI enrichment, and can never appear in `/api/search` — a rendered
+post containing a photo of Kellie must not become a search hit for "Kellie".
+PUTs are idempotent (the key is the caller's content hash): re-PUTting an
+existing key is a no-op `200 { existed: true }`. Objects are stored with
+immutable cache-control; eviction belongs to an R2 lifecycle rule (e.g.
+delete after 90 days untouched) — a cold miss just re-renders. Set
+`ASSET_DERIVED_CDN_BASE_URL` to have responses include the public `url`.
 
 ## Setup
 
@@ -109,7 +202,20 @@ writes `NOTION_COLLECTIONS_DATABASE_ID` / `NOTION_COLLECTIONS_DATA_SOURCE_ID`
 back into `.env.local`. Because it's created under a page your integration can
 already see, it inherits access automatically.
 
-### 4. Build the search index
+### 4. Enable the upload path (optional)
+
+```bash
+npm run setup:upload
+```
+
+Adds the human-context and dedup properties (`Context`, `People`, `Product`,
+`Location`, `Shoot`, `Credit`, `Rights`, `Tags`, `Source`, `Uploaded By`,
+`Uploaded At`, `SHA256`, `pHash`) to the Manifest data source. Idempotent —
+existing properties are left untouched. Then set `ASSET_LIBRARY_TOKEN`,
+`ASSET_CDN_BASE_URL` and the `R2_*` variables (write access) in `.env.local`
+to switch `POST /api/assets` on.
+
+### 5. Build the search index
 
 ```bash
 npm run build:index
@@ -120,7 +226,7 @@ Embeds every Manifest asset into `src/data/asset-index.json` (metadata) and
 the Manifest changes (new assets won't appear in search until you do). It's
 cheap — embedding a few thousand assets costs well under a cent.
 
-### 5. Run
+### 6. Run
 
 ```bash
 npm run dev
@@ -149,6 +255,14 @@ All configurable via environment variables (see `.env.local.example`):
 | `NOTION_COLLECTIONS_PARENT_PAGE_ID` | Where the Collections DB is created            |
 | `OPENAI_API_KEY`                  | Embeddings key (build-time + query-time secret)  |
 | `API_WRITE_TOKEN`                 | Optional; when set, requires a bearer token on `POST /api/collections` |
+| `ASSET_LIBRARY_TOKEN`             | Bearer token for `POST /api/assets` / `PATCH /api/assets/{id}`; uploads stay disabled until set |
+| `ASSET_CDN_BASE_URL`              | Public CDN base URL for uploaded originals (required for uploads) |
+| `ASSET_STORAGE_PREFIX`            | R2 key prefix for uploads (default `figandbloom/asset-manifest/`) |
+| `ASSET_R2_BUCKET`                 | Bucket for uploaded originals (default: `R2_BUCKET`) |
+| `ASSET_MAX_BYTES`                 | Upload size limit (default 25 MB) |
+| `ASSET_SIMILAR_DISTANCE`          | pHash Hamming distance counted as "similar" (default 6) |
+| `ASSET_DERIVED_PREFIX`            | R2 key prefix for derived objects (default `derived/`) |
+| `ASSET_DERIVED_CDN_BASE_URL`      | Optional public CDN base URL for derived objects (adds `url` to PUT responses) |
 | `EMBEDDING_MODEL` / `EMBEDDING_DIMENSIONS` | Override model (default `text-embedding-3-small`, 512d) |
 | `ASSET_INDEX_PATH`                | Metadata index path (default `src/data/asset-index.json`; vectors sit beside it as `.vec.bin`) |
 | `R2_ACCOUNT_ID` / `R2_BUCKET`     | Cloudflare R2 account + bucket holding the prebuilt index |
@@ -182,8 +296,11 @@ provision.
    - `NOTION_COLLECTIONS_DATABASE_ID`
    - `NOTION_COLLECTIONS_DATA_SOURCE_ID`
    - `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`
-     (the web service can use a **read-only** R2 token; the cron job needs a
-     read/write one)
+     (the web service needs a **read/write** R2 token when asset uploads are
+     enabled — it stores originals at runtime; read-only suffices if uploads
+     stay off. The cron job always needs read/write.)
+   - `ASSET_LIBRARY_TOKEN`, `ASSET_CDN_BASE_URL` (to enable `POST /api/assets`;
+     run `npm run setup:upload` once first)
    - `RENDER_DEPLOY_HOOK_URL` (cron job only — the web service's deploy hook,
      so a fresh index goes live automatically after re-index)
 

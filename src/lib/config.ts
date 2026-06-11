@@ -63,6 +63,71 @@ export const keywordTextProps = embeddingTextProps
   .filter((p) => p.type === "rich_text")
   .map((p) => p.name);
 
+
+// Human-context properties on the Manifest (the upload path's metadata
+// channel). These are authored by people — at upload or via PATCH backfill —
+// and are NEVER written by the AI enrichment pipeline. Created by
+// `npm run setup:upload`. Override names via env if the schema changes.
+export const humanProps = {
+  context: process.env.NOTION_PROP_CONTEXT ?? "Context",
+  people: process.env.NOTION_PROP_PEOPLE ?? "People",
+  product: process.env.NOTION_PROP_PRODUCT ?? "Product",
+  location: process.env.NOTION_PROP_LOCATION ?? "Location",
+  shoot: process.env.NOTION_PROP_SHOOT ?? "Shoot",
+  credit: process.env.NOTION_PROP_CREDIT ?? "Credit",
+  rights: process.env.NOTION_PROP_RIGHTS ?? "Rights",
+  rightsNotes: process.env.NOTION_PROP_RIGHTS_NOTES ?? "Rights Notes",
+  tags: process.env.NOTION_PROP_TAGS ?? "Tags",
+  source: process.env.NOTION_PROP_SOURCE ?? "Source",
+  uploadedBy: process.env.NOTION_PROP_UPLOADED_BY ?? "Uploaded By",
+  uploadedAt: process.env.NOTION_PROP_UPLOADED_AT ?? "Uploaded At",
+  sha256: process.env.NOTION_PROP_SHA256 ?? "SHA256",
+  phash: process.env.NOTION_PROP_PHASH ?? "pHash",
+} as const;
+
+// Human-channel rich_text properties also searched by the keyword fallback
+// (filtered against the live schema at query time, since they only exist
+// after `npm run setup:upload`).
+export const humanKeywordProps: string[] = [
+  humanProps.context,
+  humanProps.people,
+  humanProps.product,
+  humanProps.location,
+  humanProps.shoot,
+];
+
+// ---------------------------------------------------------------------------
+// Upload path (POST /api/assets)
+// ---------------------------------------------------------------------------
+export const uploadConfig = {
+  // Bearer token required on POST /api/assets and PATCH /api/assets/:id.
+  // Uploads are disabled (503) until this is set — unlike collections, asset
+  // writes are never open, because they create permanent CDN objects.
+  token: process.env.ASSET_LIBRARY_TOKEN ?? "",
+  // Public base URL the brand CDN serves uploaded originals from, e.g.
+  // https://cdn.example.com/figandbloom/asset-manifest (no trailing slash).
+  cdnBaseUrl: (process.env.ASSET_CDN_BASE_URL ?? "").replace(/\/+$/, ""),
+  // R2 object key prefix for uploaded originals. Matches the stable CDN path
+  // so content-addressed URLs never expire (unlike manifest/previews/...).
+  storagePrefix:
+    process.env.ASSET_STORAGE_PREFIX ?? "figandbloom/asset-manifest/",
+  // Bucket for uploaded originals; defaults to the index bucket.
+  bucket: process.env.ASSET_R2_BUCKET ?? process.env.R2_BUCKET ?? "",
+  maxBytes: Number(process.env.ASSET_MAX_BYTES ?? 25 * 1024 * 1024),
+  // pHash Hamming distance at or under which two images count as "similar".
+  similarDistance: Number(process.env.ASSET_SIMILAR_DISTANCE ?? "6"),
+  // Derived objects (render cache etc.): a separate CDN namespace, outside
+  // the manifest — never indexed, deduped or enriched. See PUT /api/derived.
+  derivedPrefix: process.env.ASSET_DERIVED_PREFIX ?? "derived/",
+  // Optional public base URL the CDN serves the derived prefix from, e.g.
+  // https://cdn.example.com/derived (no trailing slash). When set, PUT
+  // responses include the public `url`.
+  derivedCdnBaseUrl: (process.env.ASSET_DERIVED_CDN_BASE_URL ?? "").replace(
+    /\/+$/,
+    "",
+  ),
+} as const;
+
 // The relation property on the Collections database that links to assets.
 export const COLLECTION_ASSETS_PROP = "Assets";
 export const COLLECTION_NAME_PROP = "Name";

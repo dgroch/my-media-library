@@ -36,8 +36,22 @@ services:
         sync: false
       - key: NOTION_COLLECTIONS_PARENT_PAGE_ID
         value: 352fdc24-425f-8088-930c-c5c1ff6afa95
-      # R2 (read) — where the prebuilt index is fetched from at build time.
-      # A read-only R2 token is sufficient here. Set in the dashboard.
+      # Asset uploads (POST /api/assets). Secret bearer token consumers send;
+      # uploads stay disabled (503) until it is set. Run `npm run setup:upload`
+      # once before enabling.
+      - key: ASSET_LIBRARY_TOKEN
+        sync: false
+      # Public base URL the brand CDN serves uploaded originals from, e.g.
+      # https://cdn.example.com/figandbloom/asset-manifest (no trailing slash).
+      - key: ASSET_CDN_BASE_URL
+        sync: false
+      # Optional: public base URL for derived objects (PUT /api/derived, the
+      # render cache tier). Leave empty to omit `url` from PUT responses.
+      - key: ASSET_DERIVED_CDN_BASE_URL
+        sync: false
+      # R2 — the prebuilt index is fetched from here at build time, and
+      # uploaded originals are PUT here at runtime. A read-only token works if
+      # uploads are disabled; uploads need a read/WRITE token.
       - key: R2_ACCOUNT_ID
         sync: false
       - key: R2_ACCESS_KEY_ID
