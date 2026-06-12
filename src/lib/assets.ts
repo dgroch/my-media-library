@@ -8,7 +8,8 @@ import "server-only";
 // channels disagree, the human one wins (it leads the embedding text and the
 // CDN slug).
 
-import { humanProps, props, uploadConfig } from "./config";
+import { aiProps, humanProps, props, uploadConfig } from "./config";
+import type { AssetManifest } from "./gemini";
 import { detectMediaType, type MediaType } from "./media";
 import {
   assetsDataSourceId,
@@ -244,6 +245,10 @@ function propertyPayload(type: string, value: string | string[]): any | null {
     }
     case "date":
       return { date: asString ? { start: asString } : null };
+    case "number": {
+      const n = Number(asString);
+      return { number: Number.isFinite(n) ? n : null };
+    }
     default:
       return null; // unknown type — skip rather than fail the write
   }
@@ -511,6 +516,87 @@ export async function mergeContribution(
 
   if (Object.keys(patch).length === 0) return existing;
   return updateAssetEntry(page, patch);
+}
+
+// ---------------------------------------------------------------------------
+// AI channel — write a Gemini manifest onto an existing row. The two-channel
+// rule still holds: this only ever touches enrichment properties, never the
+// human ones. Properties absent from the live schema are skipped.
+// ---------------------------------------------------------------------------
+
+/** Render the video beat breakdown into the single rich_text Notion property. */
+function formatBeats(manifest: AssetManifest): string | undefined {
+  if (!manifest.beats?.length) return undefined;
+  return manifest.beats
+    .map(
+      (b) =>
+        `${b.start_s}–${b.end_s}s: ${b.shot_description} [${b.shot_type}; use: ${b.ai_usefulness}]`,
+    )
+    .join("\n");
+}
+
+function manifestPropertyValues(
+  manifest: AssetManifest,
+): Record<string, string | string[] | undefined> {
+  const values: Record<string, string | string[] | undefined> = {
+    [aiProps.description]: manifest.overall_description || undefined,
+    [aiProps.contentType]: manifest.content_type || undefined,
+    [aiProps.moodTone]: manifest.mood_tone.length ? manifest.mood_tone : undefined,
+    [aiProps.visualTags]: manifest.visual_tags.length
+      ? manifest.visual_tags
+      : undefined,
+    [aiProps.peoplePresent]: manifest.people_present || undefined,
+    [aiProps.productsFlowers]: manifest.products_or_flowers.length
+      ? manifest.products_or_flowers
+      : undefined,
+    [aiProps.settingLocation]: manifest.setting_location || undefined,
+    [aiProps.usableFor]: manifest.usable_for.length
+      ? manifest.usable_for
+      : undefined,
+    [aiProps.reorgNotes]: manifest.reorg_notes || undefined,
+    [aiProps.timestampBeats]: formatBeats(manifest),
+  };
+
+  const pc = manifest.product_classification;
+  if (pc) {
+    values[aiProps.containsProduct] = pc.contains_product ? "yes" : "no";
+    if (pc.product_name) values[aiProps.productName] = pc.product_name;
+    values[aiProps.productConfidence] = String(Math.round(pc.confidence * 100));
+  }
+  return values;
+}
+
+/**
+ * Write a Gemini manifest onto the row and return the refreshed entry (its
+ * `description` now carries the AI overview, so re-embedding picks it up).
+ */
+export async function writeManifest(
+  pageId: string,
+  manifest: AssetManifest,
+): Promise<ManifestEntry> {
+  const properties = await buildProperties(manifestPropertyValues(manifest));
+  const updated = (await notionClient().pages.update({
+    page_id: pageId,
+    properties,
+  } as any)) as any;
+  return pageToManifestEntry(updated);
+}
+
+// ---------------------------------------------------------------------------
+// Recent uploads — powers the post-upload review/edit page. Newest first.
+// ---------------------------------------------------------------------------
+
+export async function listRecentManifestEntries(
+  limit = 30,
+): Promise<ManifestEntry[]> {
+  const res = (await notionClient().dataSources.query({
+    data_source_id: await assetsDataSourceId(),
+    sorts: [{ timestamp: "created_time", direction: "descending" }],
+    page_size: Math.min(Math.max(limit, 1), 100),
+  })) as any;
+  return res.results
+    .filter((p: any) => !p.archived && !p.in_trash)
+    .map(pageToManifestEntry);
 }
 
 // ---------------------------------------------------------------------------
