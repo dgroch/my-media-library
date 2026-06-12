@@ -85,7 +85,7 @@ function Uploader() {
   const [uploadedBy, setUploadedBy] = useState("");
   const [source, setSource] = useState("");
   const [onSimilar, setOnSimilar] = useState<"accept" | "reject">("accept");
-  const [removeChromeImages, setRemoveChromeImages] = useState(false);
+  const [removeChromeImages, setRemoveChromeImages] = useState(true);
   const [running, setRunning] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -290,7 +290,7 @@ function Uploader() {
             onChange={(e) => setRemoveChromeImages(e.target.checked)}
           />
           Remove captions / on-screen text from photos (Instagram stories, OSTs)
-          — leave off for clean shots
+          — untick for clean product shots
         </label>
       </div>
 
