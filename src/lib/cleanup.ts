@@ -42,12 +42,25 @@ export async function removeOverlays(
   buffer: Buffer,
   mimeType: string,
 ): Promise<Buffer> {
-  if (!geminiImageEditConfigured()) return buffer;
+  if (!geminiImageEditConfigured()) {
+    console.warn(
+      "cleanup: overlay removal skipped — Gemini image editing not configured (set a Google-native GEMINI_API_KEY).",
+    );
+    return buffer;
+  }
   try {
     const edited = await editImage({ buffer, mimeType, prompt: OVERLAY_PROMPT });
     // Normalise back to JPEG so downstream (dedup, CDN) sees one format.
-    return await sharp(edited.buffer).jpeg({ quality: 92 }).toBuffer();
-  } catch {
+    const out = await sharp(edited.buffer).jpeg({ quality: 92 }).toBuffer();
+    console.log(
+      `cleanup: overlay removal applied (${buffer.length} → ${out.length} bytes).`,
+    );
+    return out;
+  } catch (err) {
+    console.error(
+      "cleanup: overlay removal failed, keeping original —",
+      err instanceof Error ? err.message : err,
+    );
     return buffer;
   }
 }

@@ -35,6 +35,8 @@ interface UploadResponse {
   manifested?: boolean;
   manifest?: { overall_description?: string; visual_tags?: string[] } | null;
   similar?: Array<{ id: string }>;
+  cleaned?: boolean;
+  cleanupRequested?: boolean;
   error?: string;
 }
 
@@ -63,12 +65,18 @@ function summariseImage(res: UploadResponse): { status: RowStatus; message: stri
   const tags = res.manifest?.visual_tags?.length ?? 0;
   const desc = res.manifest?.overall_description?.trim();
   const sim = res.similar?.length ? ` · ${res.similar.length} similar` : "";
+  // Surface whether the requested overlay removal actually happened.
+  const clean = res.cleanupRequested
+    ? res.cleaned
+      ? " · ✂ chrome removed"
+      : " · ⚠ chrome NOT removed (Gemini edit unavailable)"
+    : "";
   if (res.manifested && desc) {
     const summary = desc.length > 140 ? `${desc.slice(0, 140)}…` : desc;
     const extra = tags ? ` · ${tags} tags` : "";
-    return { status: "done", message: `${summary}${extra}${sim}` };
+    return { status: "done", message: `${summary}${extra}${sim}${clean}` };
   }
-  return { status: "done", message: `Stored — no AI enrichment${sim}.` };
+  return { status: "done", message: `Stored — no AI enrichment${sim}${clean}.` };
 }
 
 function Uploader() {
