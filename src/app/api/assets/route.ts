@@ -128,6 +128,8 @@ export async function POST(request: Request) {
         similar: result.similar,
         manifested: result.manifested,
         manifest: result.manifest,
+        cleaned: result.cleaned,
+        cleanupRequested: cleanup,
       },
       { status: 201 },
     );

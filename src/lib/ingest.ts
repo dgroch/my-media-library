@@ -41,6 +41,8 @@ export type IngestResult =
       similar: SimilarHit[];
       manifested: boolean;
       manifest: AssetManifest | null;
+      /** True when generative overlay removal actually changed the image. */
+      cleaned: boolean;
     }
   | {
       kind: "deduped";
@@ -111,12 +113,14 @@ export async function ingestImage(params: IngestParams): Promise<IngestResult> {
   let image = params.image;
   let storedMime = params.storedMime;
   let ext = params.ext;
+  let cleaned = false;
   if (params.cleanup) {
-    const cleaned = await removeOverlays(image, storedMime);
-    if (cleaned !== image) {
-      image = cleaned;
+    const result = await removeOverlays(image, storedMime);
+    if (result !== image) {
+      image = result;
       storedMime = "image/jpeg";
       ext = "jpg";
+      cleaned = true;
     }
   }
 
@@ -186,6 +190,7 @@ export async function ingestImage(params: IngestParams): Promise<IngestResult> {
     similar,
     manifested: Boolean(manifest),
     manifest,
+    cleaned,
   };
 }
 
@@ -241,5 +246,12 @@ export async function ingestVideoFile(params: {
     metadata: params.metadata,
   });
   const status = await indexEntry(entry);
-  return { kind: "created", entry: { ...entry, status }, similar: [], manifested: false, manifest: null };
+  return {
+    kind: "created",
+    entry: { ...entry, status },
+    similar: [],
+    manifested: false,
+    manifest: null,
+    cleaned: false,
+  };
 }
