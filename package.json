@@ -9,6 +9,7 @@
     "lint": "next lint",
     "setup:collections": "node scripts/setup-collections.mjs",
     "setup:upload": "node scripts/setup-upload.mjs",
+    "convert:multiselect": "node scripts/convert-multiselect.mjs",
     "build:index": "node scripts/build-index.mjs",
     "upload:index": "node scripts/upload-index.mjs",
     "fetch:index": "node scripts/fetch-index.mjs",
