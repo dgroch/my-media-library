@@ -898,6 +898,23 @@ select.search-input {
   height: 16px;
 }
 
+.btn-small {
+  padding: 7px 12px;
+  font-size: 12px;
+}
+
+.edit-card-clean {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+
+.edit-card-delete {
+  margin-left: auto;
+}
+
 .save-ok {
   color: #5fd0a0;
   font-size: 13px;

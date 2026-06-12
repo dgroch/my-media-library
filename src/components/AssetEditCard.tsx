@@ -34,8 +34,16 @@ export interface ReviewEntry {
 const RIGHTS = ["internal", "licensed", "restricted"];
 
 type SaveState = "idle" | "dirty" | "saving" | "saved" | "error";
+type CleanState = "idle" | "cleaning" | "done" | "nochange" | "error";
 
-export default function AssetEditCard({ entry }: { entry: ReviewEntry }) {
+export default function AssetEditCard({
+  entry,
+  onDeleted,
+}: {
+  entry: ReviewEntry;
+  /** Called after a successful delete so the parent can drop / navigate away. */
+  onDeleted?: (id: string) => void;
+}) {
   const [context, setContext] = useState(entry.context);
   const [people, setPeople] = useState(entry.people.map((p) => p.name).join(", "));
   const [consent, setConsent] = useState(
@@ -53,9 +61,58 @@ export default function AssetEditCard({ entry }: { entry: ReviewEntry }) {
   const [state, setState] = useState<SaveState>("idle");
   const [error, setError] = useState<string | null>(null);
 
+  // AI description shown for reference; refreshed after a re-clean.
+  const [description, setDescription] = useState(entry.description);
+  // Cache-bust the preview after we overwrite the CDN object in place.
+  const [imgVersion, setImgVersion] = useState(0);
+  const [clean, setClean] = useState<CleanState>("idle");
+  const [cleanMsg, setCleanMsg] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
   function touched() {
     if (state !== "saving") setState("dirty");
   }
+
+  async function reclean() {
+    setClean("cleaning");
+    setCleanMsg(null);
+    try {
+      const res = await fetch(`/api/assets/${entry.id}/clean`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? `Clean failed (${res.status})`);
+      if (data.cleaned) {
+        setClean("done");
+        setImgVersion((v) => v + 1);
+        if (typeof data.description === "string") setDescription(data.description);
+      } else {
+        setClean("nochange");
+        setCleanMsg("No change — Gemini image editing unavailable or nothing to remove.");
+      }
+    } catch (err) {
+      setClean("error");
+      setCleanMsg(err instanceof Error ? err.message : "Clean failed");
+    }
+  }
+
+  async function remove() {
+    if (!window.confirm(`Delete "${entry.title}"? This archives the row and removes the file.`)) {
+      return;
+    }
+    setDeleting(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/assets/${entry.id}`, { method: "DELETE" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? `Delete failed (${res.status})`);
+      onDeleted?.(entry.id);
+    } catch (err) {
+      setDeleting(false);
+      setError(err instanceof Error ? err.message : "Delete failed");
+    }
+  }
+
+  const previewUrl =
+    entry.url && imgVersion > 0 ? `${entry.url}?v=${imgVersion}` : entry.url;
 
   function splitList(value: string): string[] {
     return value
@@ -102,19 +159,39 @@ export default function AssetEditCard({ entry }: { entry: ReviewEntry }) {
     <div className="edit-card">
       <div className="edit-card-media">
         {entry.url ? (
-          <a href={entry.url} target="_blank" rel="noreferrer">
+          <a href={previewUrl} target="_blank" rel="noreferrer">
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={entry.url} alt={entry.title} loading="lazy" />
+            <img src={previewUrl} alt={entry.title} loading="lazy" />
           </a>
         ) : (
           <div className="placeholder">
             <div className="placeholder-glyph">{isVideo ? "▶" : "🖼"}</div>
           </div>
         )}
-        {entry.description ? (
-          <p className="edit-card-ai">{entry.description}</p>
+        {description ? (
+          <p className="edit-card-ai">{description}</p>
         ) : (
           <p className="edit-card-ai muted">No AI description yet.</p>
+        )}
+        {!isVideo && entry.url && (
+          <div className="edit-card-clean">
+            <button
+              className="btn btn-small"
+              onClick={reclean}
+              disabled={clean === "cleaning"}
+              title="Re-run caption / on-screen-text removal on this image"
+            >
+              {clean === "cleaning" ? (
+                <span className="spinner" />
+              ) : (
+                "✂ Remove captions / chrome"
+              )}
+            </button>
+            {clean === "done" && <span className="save-ok">Cleaned ✓</span>}
+            {(clean === "nochange" || clean === "error") && cleanMsg && (
+              <span className="save-err">{cleanMsg}</span>
+            )}
+          </div>
         )}
       </div>
 
@@ -265,6 +342,13 @@ export default function AssetEditCard({ entry }: { entry: ReviewEntry }) {
           </button>
           {state === "saved" && <span className="save-ok">Saved ✓</span>}
           {state === "error" && <span className="save-err">{error}</span>}
+          <button
+            className="btn btn-danger edit-card-delete"
+            onClick={remove}
+            disabled={deleting}
+          >
+            {deleting ? <span className="spinner" /> : "Delete"}
+          </button>
         </div>
       </div>
     </div>

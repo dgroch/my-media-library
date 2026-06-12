@@ -13,6 +13,7 @@ import {
 } from "@/lib/assets";
 import { checkAssetWriteAuth } from "@/lib/auth";
 import { embedQuery } from "@/lib/embeddings";
+import { deleteAsset } from "@/lib/ingest";
 import { isSearchable, upsertRuntimeAsset } from "@/lib/searchIndex";
 
 export const dynamic = "force-dynamic";
@@ -104,6 +105,35 @@ export async function PATCH(
   } catch (err) {
     console.error("patch asset failed", err);
     const message = err instanceof Error ? err.message : "Failed to update asset";
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}
+
+/**
+ * Delete an asset: archive the Manifest row, drop it from search, and remove
+ * its CDN object. Soft-delete (Notion has no hard delete), so the nightly
+ * re-index folds out the archived row.
+ */
+export async function DELETE(
+  request: Request,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  const denied = checkAssetWriteAuth(request);
+  if (denied) {
+    return NextResponse.json({ error: denied.error }, { status: denied.status });
+  }
+
+  const { id } = await params;
+  try {
+    const page = await getAssetPage(id);
+    if (!page) {
+      return NextResponse.json({ error: "Asset not found" }, { status: 404 });
+    }
+    await deleteAsset(page);
+    return NextResponse.json({ deleted: true, id });
+  } catch (err) {
+    console.error("delete asset failed", err);
+    const message = err instanceof Error ? err.message : "Failed to delete asset";
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

@@ -11,11 +11,13 @@ import { createHash } from "node:crypto";
 import sharp from "sharp";
 
 import {
+  archiveAsset,
   assetSlug,
   createAssetEntry,
   embeddingTextForEntry,
   findAssetBySha256,
   mergeContribution,
+  pageToManifestEntry,
   writeManifest,
   type AssetMetadataInput,
   type ManifestEntry,
@@ -25,8 +27,13 @@ import { removeOverlays } from "./cleanup";
 import { embedQuery } from "./embeddings";
 import { manifestImage, type AssetManifest } from "./gemini";
 import { hammingDistance, perceptualHash } from "./phash";
-import { assetsR2Config, r2PutObject } from "./r2";
-import { knownPhashCandidates, upsertRuntimeAsset } from "./searchIndex";
+import { assetsR2Config, r2DeleteObject, r2PutObject } from "./r2";
+import {
+  isSearchable,
+  knownPhashCandidates,
+  removeRuntimeAsset,
+  upsertRuntimeAsset,
+} from "./searchIndex";
 
 export interface SimilarHit {
   id: string;
@@ -254,4 +261,109 @@ export async function ingestVideoFile(params: {
     manifest: null,
     cleaned: false,
   };
+}
+
+// ---------------------------------------------------------------------------
+// After-the-fact maintenance: re-clean and delete an existing asset.
+// ---------------------------------------------------------------------------
+
+type EntryWithStatus = ManifestEntry & { status: "ready" | "processing" };
+
+/** The R2 object key behind an asset's CDN url, or null if it isn't ours. */
+function r2KeyForUrl(url: string): string | null {
+  const base = uploadConfig.cdnBaseUrl;
+  if (!base) return null;
+  const prefixUrl = `${base}/`;
+  if (!url.startsWith(prefixUrl)) return null;
+  const slug = url.slice(prefixUrl.length);
+  return slug ? `${uploadConfig.storagePrefix}${slug}` : null;
+}
+
+function withStatus(entry: ManifestEntry): EntryWithStatus {
+  return { ...entry, status: isSearchable(entry.id) ? "ready" : "processing" };
+}
+
+/**
+ * Re-run overlay removal on an already-stored asset. Fetches the current bytes
+ * from the CDN, strips captions/chrome, overwrites the same object key (so the
+ * URL is unchanged), then re-manifests + re-embeds so the description reflects
+ * the cleaned image. Returns `cleaned: false` (a no-op) when Gemini image
+ * editing isn't available or made no change.
+ */
+export async function recleanAsset(
+  page: any,
+): Promise<{ cleaned: boolean; entry: EntryWithStatus }> {
+  const entry = pageToManifestEntry(page);
+  const r2 = assetsR2Config();
+  if (!r2 || !uploadConfig.cdnBaseUrl) {
+    throw new Error("Asset storage is not configured.");
+  }
+  const key = r2KeyForUrl(entry.url);
+  if (!key) {
+    throw new Error("This asset has no managed CDN object to clean.");
+  }
+
+  const res = await fetch(entry.url);
+  if (!res.ok) {
+    throw new Error(`Could not fetch the stored image (${res.status}).`);
+  }
+  const original = Buffer.from(await res.arrayBuffer());
+
+  const cleaned = await removeOverlays(original, "image/jpeg");
+  if (cleaned === original) {
+    // Not configured, failed, or no change — surfaced to the caller as a no-op.
+    return { cleaned: false, entry: withStatus(entry) };
+  }
+
+  const put = await r2PutObject(r2, key, cleaned, {
+    contentType: "image/jpeg",
+    cacheControl: "public, max-age=31536000, immutable",
+  });
+  if (!put.ok) {
+    const detail = await put.text().catch(() => "");
+    console.error("reclean: R2 PUT failed", put.status, detail);
+    throw new Error("Failed to store the cleaned image.");
+  }
+
+  // Re-manifest on the cleaned image (best-effort) so the AI description no
+  // longer narrates the removed overlay text.
+  let updated = entry;
+  if (geminiConfigured()) {
+    try {
+      const meta = await sharp(cleaned).metadata();
+      const manifest = await manifestImage({
+        buffer: cleaned,
+        mimeType: "image/jpeg",
+        filename: entry.title,
+        width: meta.width,
+        height: meta.height,
+      });
+      updated = await writeManifest(entry.id, manifest);
+    } catch (err) {
+      console.error("reclean: manifesting failed", err);
+    }
+  }
+  const status = await indexEntry(updated);
+  return { cleaned: true, entry: { ...updated, status } };
+}
+
+/** Delete an asset: archive its Notion row, tombstone it out of search, and
+ *  best-effort remove its CDN object. */
+export async function deleteAsset(page: any): Promise<void> {
+  const entry = pageToManifestEntry(page);
+  await archiveAsset(entry.id);
+  removeRuntimeAsset(entry.id);
+
+  const r2 = assetsR2Config();
+  const key = r2KeyForUrl(entry.url);
+  if (r2 && key) {
+    try {
+      const res = await r2DeleteObject(r2, key);
+      if (!res.ok && res.status !== 404) {
+        console.error("delete: R2 delete failed", res.status);
+      }
+    } catch (err) {
+      console.error("delete: R2 delete error", err);
+    }
+  }
 }

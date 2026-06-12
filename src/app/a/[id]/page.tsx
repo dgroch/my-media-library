@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
 import AssetEditCard, { type ReviewEntry } from "@/components/AssetEditCard";
@@ -9,6 +9,7 @@ import SiteNav from "@/components/SiteNav";
 import UploadAuthGate from "@/components/UploadAuthGate";
 
 function Editor({ id }: { id: string }) {
+  const router = useRouter();
   const [entry, setEntry] = useState<ReviewEntry | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -51,7 +52,10 @@ function Editor({ id }: { id: string }) {
       {loading && <div className="center">Loading…</div>}
       {entry && (
         <div className="edit-list">
-          <AssetEditCard entry={entry} />
+          <AssetEditCard
+            entry={entry}
+            onDeleted={() => router.push("/")}
+          />
         </div>
       )}
     </>
