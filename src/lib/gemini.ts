@@ -9,7 +9,7 @@ import "server-only";
 // Best-effort by contract: every entry point throws on failure and the upload
 // route swallows it, so a manifesting outage never blocks an upload.
 
-import { geminiConfig } from "./config";
+import { geminiConfig, geminiImageConfig } from "./config";
 
 // ---------------------------------------------------------------------------
 // Shapes — the JSON the model is asked to return.
@@ -243,4 +243,141 @@ export async function manifestImage(
       ? await callOpenRouter(prompt, input)
       : await callGoogle(prompt, input);
   return parseManifest(raw);
+}
+
+// ---------------------------------------------------------------------------
+// Generative image editing — used by frame cleanup to inpaint out text/OST and
+// Instagram reel chrome. Google-native only (the image model needs a Google
+// key). Returns the edited image bytes, or throws so callers can fall back.
+// ---------------------------------------------------------------------------
+
+export interface EditedImage {
+  buffer: Buffer;
+  mimeType: string;
+}
+
+export async function editImage(input: {
+  buffer: Buffer;
+  mimeType: string;
+  prompt: string;
+}): Promise<EditedImage> {
+  if (!geminiImageConfig.apiKey) {
+    throw new Error("Gemini image editing is not configured (set GEMINI_API_KEY).");
+  }
+  const url =
+    `${geminiConfig.googleBaseUrl}/models/${geminiImageConfig.model}:generateContent`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-goog-api-key": geminiImageConfig.apiKey,
+    },
+    body: JSON.stringify({
+      contents: [
+        {
+          role: "user",
+          parts: [
+            { text: input.prompt },
+            {
+              inline_data: {
+                mime_type: input.mimeType,
+                data: input.buffer.toString("base64"),
+              },
+            },
+          ],
+        },
+      ],
+      generationConfig: { responseModalities: ["IMAGE", "TEXT"] },
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(`Gemini image edit failed (${res.status}): ${await res.text()}`);
+  }
+  const json = (await res.json()) as {
+    candidates?: Array<{
+      content?: {
+        parts?: Array<{ inline_data?: { mime_type?: string; data?: string } }>;
+      };
+    }>;
+  };
+  const part = json.candidates?.[0]?.content?.parts?.find(
+    (p) => p.inline_data?.data,
+  );
+  const data = part?.inline_data?.data;
+  if (!data) throw new Error("Gemini image edit returned no image");
+  return {
+    buffer: Buffer.from(data, "base64"),
+    mimeType: part?.inline_data?.mime_type ?? "image/png",
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Frame scoring — judges a candidate video frame as a standalone image on the
+// things sharpness can't see: subject prominence and composition. Used to pick
+// the best shot within each unique scene of a video (see frames.ts).
+// ---------------------------------------------------------------------------
+
+export interface FrameScore {
+  /** Is the subject clear and prominent (0-10). */
+  subject: number;
+  /** Framing, balance, rule-of-thirds, clean edges (0-10). */
+  composition: number;
+  /** Exposure, focus, motion blur, artefacts (0-10). */
+  quality: number;
+  /** Weighted overall, 0-10 — what callers rank on. */
+  overall: number;
+  notes: string;
+}
+
+const FRAME_SCORE_PROMPT =
+  `Judge this single video frame as a standalone brand photo. Score 0-10 on:\n` +
+  `- subject: is there a clear, prominent subject, well-separated from the background?\n` +
+  `- composition: framing, balance, rule-of-thirds, clean edges, no awkward crops?\n` +
+  `- quality: sharp focus, good exposure, no motion blur / compression artefacts?\n` +
+  `Penalise frames that are transitions, motion-blurred, or mostly empty. ` +
+  `Return ONLY JSON: {"subject":0,"composition":0,"quality":0,"notes":"one short phrase"}`;
+
+/**
+ * Score one frame on subject + composition + quality. Throws when Gemini is not
+ * configured or the call fails — callers fall back to a sharpness heuristic.
+ */
+export async function scoreFrame(input: {
+  buffer: Buffer;
+  mimeType: string;
+}): Promise<FrameScore> {
+  if (!geminiConfig.apiKey) {
+    throw new Error("Gemini is not configured (set GEMINI_API_KEY).");
+  }
+  const frameInput: ImageManifestInput = {
+    buffer: input.buffer,
+    mimeType: input.mimeType,
+    filename: "frame.jpg",
+  };
+  const raw =
+    geminiConfig.provider === "openrouter"
+      ? await callOpenRouter(FRAME_SCORE_PROMPT, frameInput)
+      : await callGoogle(FRAME_SCORE_PROMPT, frameInput);
+
+  let text = raw.trim();
+  const fence = /```(?:json)?\s*([\s\S]*?)```/i.exec(text);
+  if (fence) text = fence[1].trim();
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start >= 0 && end > start) text = text.slice(start, end + 1);
+  const obj = JSON.parse(text) as Record<string, unknown>;
+
+  const clamp = (v: unknown) => Math.max(0, Math.min(10, Number(v) || 0));
+  const subject = clamp(obj.subject);
+  const composition = clamp(obj.composition);
+  const quality = clamp(obj.quality);
+  // Lead with subject + composition (the user's priority); quality is a
+  // tiebreaker that sharpness already partly covers.
+  const overall = subject * 0.4 + composition * 0.4 + quality * 0.2;
+  return {
+    subject,
+    composition,
+    quality,
+    overall,
+    notes: String(obj.notes ?? "").trim(),
+  };
 }

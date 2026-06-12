@@ -151,6 +151,39 @@ export function parseRightsKind(raw: string): RightsKind {
   return kind as RightsKind;
 }
 
+/**
+ * Collect the optional human-metadata fields shared by the photo upload and
+ * video routes from a multipart form. Throws (with a caller-facing message) on
+ * malformed `people` / `tags` / `rights`.
+ */
+export function readAssetMetadataForm(form: FormData): AssetMetadataInput {
+  const text = (name: string): string | undefined => {
+    const v = form.get(name);
+    return typeof v === "string" && v.trim() ? v.trim() : undefined;
+  };
+
+  const metadata: AssetMetadataInput = {
+    context: text("context"),
+    product: text("product"),
+    location: text("location"),
+    shoot: text("shoot"),
+    credit: text("credit"),
+    source: text("source"),
+    uploaded_by: text("uploaded_by"),
+  };
+
+  const people = text("people");
+  if (people) metadata.people = parsePeopleField(people);
+
+  const tags = text("tags");
+  if (tags) metadata.tags = parseTagsField(tags);
+
+  const rights = text("rights");
+  if (rights) metadata.rights = { kind: parseRightsKind(rights) };
+
+  return metadata;
+}
+
 // ---------------------------------------------------------------------------
 // Slug generation
 // ---------------------------------------------------------------------------
@@ -634,3 +667,34 @@ export function resolveUploadMime(
 }
 
 export const MAX_UPLOAD_BYTES = uploadConfig.maxBytes;
+
+/** Accepted video upload types → canonical container extension. */
+export const ACCEPTED_VIDEO_TYPES: Record<string, string> = {
+  "video/mp4": "mp4",
+  "video/quicktime": "mov",
+  "video/webm": "webm",
+  "video/x-m4v": "m4v",
+  "video/x-matroska": "mkv",
+};
+
+const VIDEO_EXT_TO_MIME: Record<string, string> = {
+  mp4: "video/mp4",
+  mov: "video/quicktime",
+  m4v: "video/x-m4v",
+  webm: "video/webm",
+  mkv: "video/x-matroska",
+};
+
+/** Resolve a video upload's MIME from the Blob type or filename extension. */
+export function resolveVideoMime(
+  declaredType: string,
+  filename: string,
+): string | null {
+  const declared = declaredType.toLowerCase().split(";")[0].trim();
+  if (ACCEPTED_VIDEO_TYPES[declared]) return declared;
+  const m = /\.([a-z0-9]+)$/i.exec(filename.trim());
+  const byExt = m ? VIDEO_EXT_TO_MIME[m[1].toLowerCase()] : undefined;
+  return byExt && ACCEPTED_VIDEO_TYPES[byExt] ? byExt : null;
+}
+
+export const MAX_VIDEO_BYTES = uploadConfig.maxVideoBytes;

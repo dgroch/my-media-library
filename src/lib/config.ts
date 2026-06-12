@@ -137,6 +137,9 @@ export const uploadConfig = {
   // Bucket for uploaded originals; defaults to the index bucket.
   bucket: process.env.ASSET_R2_BUCKET ?? process.env.R2_BUCKET ?? "",
   maxBytes: Number(process.env.ASSET_MAX_BYTES ?? 25 * 1024 * 1024),
+  // Video uploads are read fully into memory for frame extraction, so keep the
+  // cap modest on small instances. Reels are typically well under this.
+  maxVideoBytes: Number(process.env.ASSET_MAX_VIDEO_BYTES ?? 100 * 1024 * 1024),
   // pHash Hamming distance at or under which two images count as "similar".
   similarDistance: Number(process.env.ASSET_SIMILAR_DISTANCE ?? "6"),
   // Derived objects (render cache etc.): a separate CDN namespace, outside
@@ -213,6 +216,20 @@ export const geminiConfig = {
 
 export function geminiConfigured(): boolean {
   return Boolean(geminiConfig.apiKey);
+}
+
+// Generative image editing (frame cleanup — removing OSTs / reel chrome via
+// inpainting). Uses Gemini's image model on the Google-native API; an
+// OpenRouter text key can't drive it, so overlay removal is skipped there and
+// cleanup falls back to the conservative sharp adjustments.
+export const geminiImageConfig = {
+  model: process.env.GEMINI_IMAGE_MODEL ?? "gemini-2.5-flash-image",
+  // Editing needs a Google-native key regardless of GEMINI_PROVIDER.
+  apiKey: process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY ?? "",
+} as const;
+
+export function geminiImageEditConfigured(): boolean {
+  return Boolean(geminiImageConfig.apiKey);
 }
 
 // Where `npm run build:index` writes the prebuilt index. It lives under src/

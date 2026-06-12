@@ -1,6 +1,10 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // The video pipeline shells out to the bundled static ffmpeg/ffprobe binaries.
+  // These packages resolve their binary path relative to their own __dirname, so
+  // they must stay external (unbundled) or the path breaks at runtime.
+  serverExternalPackages: ["ffmpeg-static", "ffprobe-static"],
   // Asset previews are served from a CDN and rendered with plain <img> tags, so
   // there is nothing to allowlist for image optimization.
   //
