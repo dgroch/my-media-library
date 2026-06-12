@@ -293,22 +293,24 @@ export async function editImage(input: {
   if (!res.ok) {
     throw new Error(`Gemini image edit failed (${res.status}): ${await res.text()}`);
   }
+  // The generativelanguage REST API returns image bytes camelCase
+  // (`inlineData`/`mimeType`); accept snake_case too for safety.
+  type InlineBlob = { mimeType?: string; mime_type?: string; data?: string };
+  type ImgPart = { inlineData?: InlineBlob; inline_data?: InlineBlob };
   const json = (await res.json()) as {
-    candidates?: Array<{
-      content?: {
-        parts?: Array<{ inline_data?: { mime_type?: string; data?: string } }>;
+    candidates?: Array<{ content?: { parts?: ImgPart[] } }>;
+  };
+  const parts = json.candidates?.[0]?.content?.parts ?? [];
+  for (const p of parts) {
+    const inline = p.inlineData ?? p.inline_data;
+    if (inline?.data) {
+      return {
+        buffer: Buffer.from(inline.data, "base64"),
+        mimeType: inline.mimeType ?? inline.mime_type ?? "image/png",
       };
-    }>;
-  };
-  const part = json.candidates?.[0]?.content?.parts?.find(
-    (p) => p.inline_data?.data,
-  );
-  const data = part?.inline_data?.data;
-  if (!data) throw new Error("Gemini image edit returned no image");
-  return {
-    buffer: Buffer.from(data, "base64"),
-    mimeType: part?.inline_data?.mime_type ?? "image/png",
-  };
+    }
+  }
+  throw new Error("Gemini image edit returned no image");
 }
 
 // ---------------------------------------------------------------------------
