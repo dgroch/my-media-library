@@ -24,19 +24,30 @@ export interface R2Config {
   endpoint: string;
 }
 
-/** R2 config for asset storage, or null when env vars are missing. */
+/**
+ * R2 config for asset storage, or null when env vars are missing.
+ *
+ * Uploaded originals are served by the brand CDN worker, which may read a
+ * bucket in a *different* Cloudflare account than the search index. So the
+ * asset path accepts its own credentials (`ASSET_R2_*`), each falling back to
+ * the shared index credentials (`R2_*`) when unset — set the `ASSET_R2_*` ones
+ * only when the CDN bucket lives in another account.
+ */
 export function assetsR2Config(): R2Config | null {
-  const accountId = process.env.R2_ACCOUNT_ID;
-  const accessKeyId = process.env.R2_ACCESS_KEY_ID;
-  const secretAccessKey = process.env.R2_SECRET_ACCESS_KEY;
+  const accountId = process.env.ASSET_R2_ACCOUNT_ID || process.env.R2_ACCOUNT_ID;
+  const accessKeyId =
+    process.env.ASSET_R2_ACCESS_KEY_ID || process.env.R2_ACCESS_KEY_ID;
+  const secretAccessKey =
+    process.env.ASSET_R2_SECRET_ACCESS_KEY || process.env.R2_SECRET_ACCESS_KEY;
   const bucket = uploadConfig.bucket;
   if (!accountId || !accessKeyId || !secretAccessKey || !bucket) return null;
   return {
     accessKeyId,
     secretAccessKey,
     bucket,
-    region: process.env.R2_REGION || "auto",
+    region: process.env.ASSET_R2_REGION || process.env.R2_REGION || "auto",
     endpoint:
+      process.env.ASSET_R2_ENDPOINT ||
       process.env.R2_ENDPOINT ||
       `https://${accountId}.r2.cloudflarestorage.com`,
   };
