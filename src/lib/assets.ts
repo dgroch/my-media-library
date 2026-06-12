@@ -15,6 +15,7 @@ import {
   assetsDataSourceId,
   manifestSchema,
   notionClient,
+  notionRetry,
   plainText,
 } from "./notion";
 
@@ -384,7 +385,9 @@ export function pageToManifestEntry(page: any): ManifestEntry {
 export async function getAssetPage(id: string): Promise<any | null> {
   let page: any;
   try {
-    page = await notionClient().pages.retrieve({ page_id: id });
+    page = await notionRetry("getAssetPage", () =>
+      notionClient().pages.retrieve({ page_id: id }),
+    );
   } catch {
     return null;
   }
@@ -404,14 +407,17 @@ export async function getAssetPage(id: string): Promise<any | null> {
 export async function findAssetBySha256(sha256: string): Promise<any | null> {
   const schema = await manifestSchema();
   if (!schema.has(humanProps.sha256)) return null; // pre-setup: no dedupe possible
-  const res = (await notionClient().dataSources.query({
-    data_source_id: await assetsDataSourceId(),
-    filter: {
-      property: humanProps.sha256,
-      rich_text: { equals: sha256 },
-    },
-    page_size: 1,
-  })) as any;
+  const dataSourceId = await assetsDataSourceId();
+  const res = (await notionRetry("findAssetBySha256", () =>
+    notionClient().dataSources.query({
+      data_source_id: dataSourceId,
+      filter: {
+        property: humanProps.sha256,
+        rich_text: { equals: sha256 },
+      },
+      page_size: 1,
+    }),
+  )) as any;
   const page = res.results?.find((r: any) => !r.archived && !r.in_trash);
   return page ?? null;
 }
@@ -463,13 +469,13 @@ export async function createAssetEntry(
     // possibly-undefined value can't clobber it.
     [humanProps.rights]: input.metadata.rights?.kind ?? "internal",
   });
-  const page = (await notionClient().pages.create({
-    parent: {
-      type: "data_source_id",
-      data_source_id: await assetsDataSourceId(),
-    },
-    properties,
-  } as any)) as any;
+  const dataSourceId = await assetsDataSourceId();
+  const page = (await notionRetry("createAssetEntry", () =>
+    notionClient().pages.create({
+      parent: { type: "data_source_id", data_source_id: dataSourceId },
+      properties,
+    } as any),
+  )) as any;
   return pageToManifestEntry(page);
 }
 
@@ -479,10 +485,9 @@ export async function updateAssetEntry(
   patch: AssetMetadataInput,
 ): Promise<ManifestEntry> {
   const properties = await buildProperties(metadataPropertyValues(patch));
-  const updated = (await notionClient().pages.update({
-    page_id: page.id,
-    properties,
-  } as any)) as any;
+  const updated = (await notionRetry("updateAssetEntry", () =>
+    notionClient().pages.update({ page_id: page.id, properties } as any),
+  )) as any;
   return pageToManifestEntry(updated);
 }
 
@@ -608,10 +613,9 @@ export async function writeManifest(
   manifest: AssetManifest,
 ): Promise<ManifestEntry> {
   const properties = await buildProperties(manifestPropertyValues(manifest));
-  const updated = (await notionClient().pages.update({
-    page_id: pageId,
-    properties,
-  } as any)) as any;
+  const updated = (await notionRetry("writeManifest", () =>
+    notionClient().pages.update({ page_id: pageId, properties } as any),
+  )) as any;
   return pageToManifestEntry(updated);
 }
 
@@ -622,11 +626,14 @@ export async function writeManifest(
 export async function listRecentManifestEntries(
   limit = 30,
 ): Promise<ManifestEntry[]> {
-  const res = (await notionClient().dataSources.query({
-    data_source_id: await assetsDataSourceId(),
-    sorts: [{ timestamp: "created_time", direction: "descending" }],
-    page_size: Math.min(Math.max(limit, 1), 100),
-  })) as any;
+  const dataSourceId = await assetsDataSourceId();
+  const res = (await notionRetry("listRecentManifestEntries", () =>
+    notionClient().dataSources.query({
+      data_source_id: dataSourceId,
+      sorts: [{ timestamp: "created_time", direction: "descending" }],
+      page_size: Math.min(Math.max(limit, 1), 100),
+    }),
+  )) as any;
   return res.results
     .filter((p: any) => !p.archived && !p.in_trash)
     .map(pageToManifestEntry);
