@@ -31,9 +31,63 @@ function notion(): Client {
     );
   }
   if (!client) {
-    client = new Client({ auth: notionConfig.token });
+    // Raise the per-request timeout above the 60s default: retrieving the
+    // Manifest data source's schema (with its accumulated multi_select option
+    // lists) can be slow, and the upload path can't proceed without it.
+    client = new Client({
+      auth: notionConfig.token,
+      timeoutMs: Number(process.env.NOTION_TIMEOUT_MS ?? 120000),
+    });
   }
   return client;
+}
+
+// --- retry --------------------------------------------------------------------
+// The runtime equivalent of the build script's resilience (PR #2): the Notion
+// SDK does not retry request timeouts or 5xx on its own, so a single slow call
+// fails the whole request. Wrap the hot-path calls so a transient hiccup is
+// absorbed instead of surfacing as a failed upload.
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+function isRetriableNotionError(err: unknown): boolean {
+  const e = err as { code?: string; status?: number } | undefined;
+  const status = e?.status;
+  return (
+    e?.code === "notionhq_client_request_timeout" ||
+    e?.code === "notionhq_client_response_error" ||
+    e?.code === "ECONNRESET" ||
+    e?.code === "ETIMEDOUT" ||
+    e?.code === "ENOTFOUND" ||
+    status === 429 ||
+    (typeof status === "number" && status >= 500)
+  );
+}
+
+export async function notionRetry<T>(
+  label: string,
+  fn: () => Promise<T>,
+  maxRetries = Number(process.env.NOTION_MAX_RETRIES ?? 3),
+): Promise<T> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (!isRetriableNotionError(err) || attempt === maxRetries) break;
+      const base = Math.min(1000 * 2 ** attempt, 8000);
+      const delay = Math.round(base * (0.8 + Math.random() * 0.4));
+      const reason =
+        (err as { code?: string; status?: number })?.code ??
+        (err as { status?: number })?.status;
+      console.warn(
+        `notion ${label} failed (${reason}); retry ${attempt + 1}/${maxRetries} in ${delay}ms`,
+      );
+      await sleep(delay);
+    }
+  }
+  throw lastErr;
 }
 
 // ---------------------------------------------------------------------------
@@ -76,18 +130,44 @@ export { notion as notionClient, assetsDataSourceId };
 // ---------------------------------------------------------------------------
 
 let cachedManifestSchema: Map<string, string> | null = null;
+let manifestSchemaInFlight: Promise<Map<string, string>> | null = null;
 
 export async function manifestSchema(): Promise<Map<string, string>> {
   if (cachedManifestSchema) return cachedManifestSchema;
-  const ds = (await notion().dataSources.retrieve({
-    data_source_id: await assetsDataSourceId(),
-  })) as unknown as { properties?: Record<string, { type: string }> };
-  const map = new Map<string, string>();
-  for (const [name, def] of Object.entries(ds.properties ?? {})) {
-    map.set(name, def.type);
+  // De-dupe concurrent callers (every upload checks the schema) onto a single
+  // retrieve, and retry transient timeouts. On failure, clear the in-flight
+  // promise so the next caller retries rather than inheriting the rejection.
+  if (!manifestSchemaInFlight) {
+    manifestSchemaInFlight = (async () => {
+      const dataSourceId = await assetsDataSourceId();
+      const ds = (await notionRetry("manifest schema retrieve", () =>
+        notion().dataSources.retrieve({ data_source_id: dataSourceId }),
+      )) as unknown as { properties?: Record<string, { type: string }> };
+      const map = new Map<string, string>();
+      for (const [name, def] of Object.entries(ds.properties ?? {})) {
+        map.set(name, def.type);
+      }
+      cachedManifestSchema = map;
+      return map;
+    })().catch((err) => {
+      manifestSchemaInFlight = null;
+      throw err;
+    });
   }
-  cachedManifestSchema = map;
-  return map;
+  return manifestSchemaInFlight;
+}
+
+// Pre-warm the schema cache on first server import so the (potentially slow)
+// retrieve happens in the background — off the user's upload click path. The
+// first page/search request that imports this module triggers it; by the time
+// an upload runs, the schema is usually already cached.
+if (
+  notionConfig.token &&
+  process.env.NEXT_PHASE !== "phase-production-build"
+) {
+  void manifestSchema().catch(() => {
+    /* best-effort warm; real callers will retry */
+  });
 }
 
 async function collectionsDataSourceId(): Promise<string> {
