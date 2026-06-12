@@ -158,8 +158,36 @@ Two pages put the upload path behind a UI for non-technical users:
 Because asset writes are never open, these pages sign in once with the
 `ASSET_LIBRARY_TOKEN` and exchange it (at `POST /api/session`) for an httpOnly
 session cookie — the raw token never reaches client JavaScript. Programmatic
-clients keep using the `Authorization: Bearer` header. Video upload and the
-frames pipeline land in a follow-up.
+clients keep using the `Authorization: Bearer` header.
+
+### Video → frames
+
+`/upload` also accepts video. For each clip you choose how to ingest it:
+
+- **Keep whole video** — the clip is stored as a single asset (`POST /api/videos`
+  with `choice=video`), de-duplicated by SHA-256 like any upload.
+- **Extract frames** (`choice=frames`) — kicks off a background job
+  (`GET /api/videos/jobs/{id}` to poll) that turns a reel into still images:
+
+  1. **Extract** candidate frames with ffmpeg (bundled via `ffmpeg-static`, so
+     no system packages) — scene-change detection plus a uniform safety net.
+  2. **Unique scenes** — cluster near-identical frames by perceptual hash so a
+     held shot doesn't yield ten copies.
+  3. **Best shot** — within each scene, pick the strongest frame. Sharpness is a
+     cheap pre-filter; the actual pick is a Gemini frame score that weighs
+     **subject prominence and composition**, falling back to sharpness when
+     Gemini is unavailable.
+  4. **Tidy up** — optional generative removal of captions / OSTs / reel chrome
+     (Gemini image model, inpainting only — never invents subjects), then a
+     conservative sharpen + colour/exposure pass via sharp.
+  5. **File** — each surviving frame enters the same ingest path as a photo
+     (dedup, store, Gemini manifest) and shows up on `/uploads` to tag.
+
+  The primary use case is turning UGC-creator Instagram reels into clean,
+  on-brand stills. Frame jobs run in-process and their state is in-memory (lost
+  on a redeploy); fine for this low-volume internal tool. Overlay removal needs
+  a Google-native `GEMINI_API_KEY` (see `GEMINI_IMAGE_MODEL`); with only an
+  OpenRouter key, cleanup is the conservative sharp pass alone.
 
 Uploaded assets are inserted into the in-process search index immediately
 (embedded on the spot, human-context first), so `GET /api/search?q=Kellie`
