@@ -56,7 +56,13 @@ function Review() {
 
       <div className="edit-list">
         {entries.map((entry) => (
-          <AssetEditCard key={entry.id} entry={entry} />
+          <AssetEditCard
+            key={entry.id}
+            entry={entry}
+            onDeleted={(id) =>
+              setEntries((prev) => prev.filter((e) => e.id !== id))
+            }
+          />
         ))}
       </div>
     </>

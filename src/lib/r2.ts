@@ -76,9 +76,17 @@ export async function r2HeadObject(
   return r2Request(cfg, "HEAD", key, {});
 }
 
+/** DELETE an object (idempotent — R2 returns 204 even if it was already gone). */
+export async function r2DeleteObject(
+  cfg: R2Config,
+  key: string,
+): Promise<Response> {
+  return r2Request(cfg, "DELETE", key, {});
+}
+
 async function r2Request(
   cfg: R2Config,
-  method: "PUT" | "HEAD",
+  method: "PUT" | "HEAD" | "DELETE",
   key: string,
   {
     body,

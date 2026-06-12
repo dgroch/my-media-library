@@ -83,6 +83,18 @@ const MAX_HITS = 300;
 
 const runtime = new Map<string, RuntimeEntry>();
 
+// Tombstones: assets archived/deleted at runtime. semanticSearch and
+// isSearchable exclude these so a delete is reflected immediately, even for
+// rows baked into the prebuilt index (which can't be mutated in place). Cleared
+// on restart, by which point the nightly re-index has dropped the archived row.
+const removed = new Set<string>();
+
+/** Drop an asset from the runtime overlay and tombstone it out of search. */
+export function removeRuntimeAsset(id: string): void {
+  runtime.delete(id);
+  removed.add(id);
+}
+
 let loaded: LoadedIndex | null | undefined;
 
 function resolve(p: string): string {
@@ -224,6 +236,7 @@ export function upsertRuntimeAsset(
 
 /** True when the asset is currently findable through /api/search. */
 export function isSearchable(id: string): boolean {
+  if (removed.has(id)) return false;
   if (runtime.has(id)) return true;
   return loadIndex()?.ids.has(id) ?? false;
 }
@@ -309,7 +322,8 @@ export async function semanticSearch(
     ordered = overlayEntries.map((e) => e.asset);
     if (index) {
       for (const i of index.recencyOrder) {
-        if (!runtime.has(index.assets[i].id)) ordered.push(index.assets[i]);
+        const id = index.assets[i].id;
+        if (!runtime.has(id) && !removed.has(id)) ordered.push(index.assets[i]);
       }
     }
   } else {
@@ -331,7 +345,8 @@ export async function semanticSearch(
     if (index && qn) {
       const { dim, vectors, assets, human } = index;
       for (let i = 0; i < assets.length; i++) {
-        if (runtime.has(assets[i].id)) continue; // shadowed by overlay
+        // Skip overlay-shadowed and tombstoned (deleted) assets.
+        if (runtime.has(assets[i].id) || removed.has(assets[i].id)) continue;
         const off = i * dim;
         let dotp = 0;
         for (let j = 0; j < dim; j++) dotp += qn[j] * vectors[off + j];

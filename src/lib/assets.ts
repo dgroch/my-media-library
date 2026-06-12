@@ -619,6 +619,17 @@ export async function writeManifest(
   return pageToManifestEntry(updated);
 }
 
+/**
+ * Archive (soft-delete) an asset row. Notion has no hard delete, so we set
+ * `archived`; getAssetPage, search and the recent list all ignore archived
+ * rows, so it disappears from the app immediately.
+ */
+export async function archiveAsset(pageId: string): Promise<void> {
+  await notionRetry("archiveAsset", () =>
+    notionClient().pages.update({ page_id: pageId, archived: true } as any),
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Recent uploads — powers the post-upload review/edit page. Newest first.
 // ---------------------------------------------------------------------------
