@@ -71,6 +71,12 @@ export default function HomePage() {
           <Link href="/collections" className="nav-link">
             Collections
           </Link>
+          <Link href="/upload" className="nav-link">
+            Upload
+          </Link>
+          <Link href="/uploads" className="nav-link">
+            Review
+          </Link>
           <form className="search-form" onSubmit={onSubmit}>
             <input
               className="search-input"

@@ -17,12 +17,14 @@ import {
   parseRightsKind,
   parseTagsField,
   resolveUploadMime,
+  writeManifest,
   type AssetMetadataInput,
   type ManifestEntry,
 } from "@/lib/assets";
 import { checkAssetWriteAuth } from "@/lib/auth";
-import { uploadConfig } from "@/lib/config";
+import { geminiConfigured, uploadConfig } from "@/lib/config";
 import { embedQuery } from "@/lib/embeddings";
+import { manifestImage, type AssetManifest } from "@/lib/gemini";
 import { hammingDistance, perceptualHash } from "@/lib/phash";
 import { assetsR2Config, r2PutObject } from "@/lib/r2";
 import { knownPhashCandidates, upsertRuntimeAsset } from "@/lib/searchIndex";
@@ -181,8 +183,10 @@ export async function POST(request: Request) {
         return errorJson(415, "Could not decode the HEIC file.");
       }
     }
+    let dimensions: { width?: number; height?: number } = {};
     try {
-      await sharp(stored).metadata();
+      const meta = await sharp(stored).metadata();
+      dimensions = { width: meta.width, height: meta.height };
     } catch {
       return errorJson(415, "File does not decode as a supported image.");
     }
@@ -216,7 +220,7 @@ export async function POST(request: Request) {
     }
 
     const url = `${uploadConfig.cdnBaseUrl}/${slug}`;
-    const entry = await createAssetEntry({
+    let entry = await createAssetEntry({
       filename: slug,
       url,
       mimeType: storedMime,
@@ -225,9 +229,29 @@ export async function POST(request: Request) {
       metadata,
     });
 
+    // AI enrichment (best-effort): run the image through Gemini and write the
+    // AI channel onto the row. A manifesting outage must never fail the upload —
+    // the asset is already stored and is findable by its human context.
+    let manifest: AssetManifest | null = null;
+    if (geminiConfigured()) {
+      try {
+        manifest = await manifestImage({
+          buffer: stored,
+          mimeType: storedMime,
+          filename: slug,
+          width: dimensions.width,
+          height: dimensions.height,
+        });
+        entry = await writeManifest(entry.id, manifest);
+      } catch (err) {
+        console.error("upload: manifesting failed", err);
+        manifest = null;
+      }
+    }
+
     const status = await indexEntry(entry);
     return NextResponse.json(
-      { ...entry, status, similar },
+      { ...entry, status, similar, manifested: Boolean(manifest), manifest },
       { status: 201 },
     );
   } catch (err) {

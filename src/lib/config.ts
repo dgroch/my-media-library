@@ -32,6 +32,29 @@ export const props = {
   driveLink: process.env.NOTION_PROP_DRIVE_LINK ?? "Drive Link",
 } as const;
 
+// AI-channel properties on the Manifest — the enrichment side of the two-channel
+// rule. These are written by the manifesting pipeline (Gemini vision at upload,
+// or the offline Drive crawler skill) and NEVER by the human path. Names default
+// to the live "Brand Asset Manifest" schema; override via env if it changes.
+// Writes are schema-adaptive (see buildProperties), so a property missing from
+// the data source is silently skipped rather than erroring.
+export const aiProps = {
+  description: process.env.NOTION_PROP_DESCRIPTION ?? "Overall Description",
+  contentType: process.env.NOTION_PROP_CONTENT_TYPE ?? "Content Type",
+  moodTone: process.env.NOTION_PROP_MOOD_TONE ?? "Mood Tone",
+  visualTags: process.env.NOTION_PROP_VISUAL_TAGS ?? "Visual Tags",
+  peoplePresent: process.env.NOTION_PROP_PEOPLE_PRESENT ?? "People Present",
+  productsFlowers: process.env.NOTION_PROP_PRODUCTS_FLOWERS ?? "Products / Flowers",
+  settingLocation: process.env.NOTION_PROP_SETTING_LOCATION ?? "Setting / Location",
+  usableFor: process.env.NOTION_PROP_USABLE_FOR ?? "Usable For",
+  reorgNotes: process.env.NOTION_PROP_REORG_NOTES ?? "Reorg Notes",
+  timestampBeats: process.env.NOTION_PROP_TIMESTAMP_BEATS ?? "Timestamp Beats",
+  containsProduct: process.env.NOTION_PROP_CONTAINS_PRODUCT ?? "Contains Product",
+  productName: process.env.NOTION_PROP_PRODUCT_NAME ?? "Product Name",
+  productConfidence:
+    process.env.NOTION_PROP_PRODUCT_CONFIDENCE ?? "Product Match Confidence",
+} as const;
+
 // All the descriptive text properties that carry meaning from the manifest
 // process. These are concatenated into a single document per asset and fed to
 // the embedding model. The label is included so the model gets light structure.
@@ -144,6 +167,53 @@ export const embeddingConfig = {
   // parameter natively.
   dimensions: Number(process.env.EMBEDDING_DIMENSIONS ?? "512"),
 } as const;
+
+// ---------------------------------------------------------------------------
+// Gemini vision manifesting (POST /api/assets enrichment)
+// ---------------------------------------------------------------------------
+// Mirrors the brand-asset-manifesting skill: analyse the uploaded image with a
+// Gemini vision model and fill the AI channel (Overall Description, Visual Tags,
+// …). Two providers are supported — Google's native Generative Language API
+// (default) and OpenRouter — so this matches whichever key the org already has.
+// Manifesting is best-effort: when no key is configured (or a call fails) the
+// upload still succeeds, just without AI enrichment.
+type GeminiProvider = "google" | "openrouter";
+
+const geminiProvider = (
+  process.env.GEMINI_PROVIDER ?? "google"
+).toLowerCase() as GeminiProvider;
+
+export const geminiConfig = {
+  provider: geminiProvider,
+  // Google native: GEMINI_API_KEY or GOOGLE_API_KEY. OpenRouter: OPENROUTER_API_KEY.
+  apiKey:
+    geminiProvider === "openrouter"
+      ? process.env.OPENROUTER_API_KEY ?? ""
+      : process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY ?? "",
+  // Defaults follow the manifesting skill: gemini-2.5-flash on Google native,
+  // google/gemini-3-flash-preview on OpenRouter.
+  model:
+    process.env.GEMINI_MODEL ??
+    (geminiProvider === "openrouter"
+      ? "google/gemini-3-flash-preview"
+      : "gemini-2.5-flash"),
+  googleBaseUrl: (
+    process.env.GEMINI_GOOGLE_BASE_URL ??
+    "https://generativelanguage.googleapis.com/v1beta"
+  ).replace(/\/+$/, ""),
+  openrouterBaseUrl: (
+    process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1"
+  ).replace(/\/+$/, ""),
+  // When true, ask the model to also classify the catalogue product (a review
+  // suggestion — the human Product field stays canonical).
+  productClassification:
+    (process.env.PRODUCT_CLASSIFICATION_ENABLED ?? "true").toLowerCase() !==
+    "false",
+} as const;
+
+export function geminiConfigured(): boolean {
+  return Boolean(geminiConfig.apiKey);
+}
 
 // Where `npm run build:index` writes the prebuilt index. It lives under src/
 // so it is bundled into the build via a static import (see searchIndex.ts) —

@@ -12,11 +12,57 @@ import "server-only";
 // "Save collection" flow from working, since the browser has no safe place to
 // hold the secret.
 
+import { createHash, timingSafeEqual } from "node:crypto";
+
 import { uploadConfig } from "./config";
 
 export interface AuthFailure {
   status: number;
   error: string;
+}
+
+// ---------------------------------------------------------------------------
+// Browser session (for the in-app upload / review pages)
+// ---------------------------------------------------------------------------
+// The asset token must never live in client JS. Instead the upload UI exchanges
+// it once at POST /api/session for an httpOnly cookie holding sha256(token);
+// subsequent same-origin asset writes are authorised by that cookie. The raw
+// token is never readable from the browser, and the cookie only carries a hash.
+
+export const ASSET_SESSION_COOKIE = "al_session";
+
+function sha256(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+/** The cookie value a valid session carries (the hash of the configured token). */
+export function assetSessionValue(): string {
+  return sha256(uploadConfig.token);
+}
+
+function safeEqual(a: string, b: string): boolean {
+  const ba = Buffer.from(a);
+  const bb = Buffer.from(b);
+  return ba.length === bb.length && timingSafeEqual(ba, bb);
+}
+
+function cookieValue(request: Request, name: string): string | undefined {
+  const header = request.headers.get("cookie") ?? "";
+  for (const part of header.split(";")) {
+    const eq = part.indexOf("=");
+    if (eq === -1) continue;
+    if (part.slice(0, eq).trim() === name) {
+      return decodeURIComponent(part.slice(eq + 1).trim());
+    }
+  }
+  return undefined;
+}
+
+/** True when the request carries a valid asset-session cookie. */
+export function hasValidAssetSession(request: Request): boolean {
+  if (!uploadConfig.token) return false;
+  const value = cookieValue(request, ASSET_SESSION_COOKIE);
+  return Boolean(value) && safeEqual(value as string, assetSessionValue());
 }
 
 /**
@@ -46,6 +92,9 @@ export function checkAssetWriteAuth(request: Request): AuthFailure | null {
         "Asset uploads are disabled: set ASSET_LIBRARY_TOKEN on the deployment.",
     };
   }
+  // The in-app upload UI authenticates with a session cookie (set at
+  // /api/session); programmatic clients still send a bearer token.
+  if (hasValidAssetSession(request)) return null;
   return checkBearer(request, expected);
 }
 

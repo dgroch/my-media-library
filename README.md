@@ -125,6 +125,13 @@ Optional metadata fields: `context`, `people` (JSON, with per-person consent),
   touched by AI enrichment (which owns `Overall Description`). A query naming
   a person or product also boosts those assets directly, not just via
   embedding similarity.
+- **AI manifesting on upload.** When a Gemini key is configured (see
+  `GEMINI_API_KEY`), each uploaded photo is run through a Gemini vision model
+  that fills the AI channel — `Overall Description`, `Content Type`, `Mood
+  Tone`, `Visual Tags`, `Products / Flowers`, `Setting / Location`, `Usable
+  For` — exactly the fields the offline brand-asset-manifesting skill produces.
+  It is best-effort: if the key is unset or a call fails, the upload still
+  succeeds, just without enrichment. Human fields are never overwritten.
 - **Backfill.** `PATCH /api/assets/{id}` accepts the same metadata fields
   (no file): add `{"people":[{"name":"Kellie"}]}` to a years-old Drive-synced
   asset and it becomes findable by "Kellie". The entry is re-embedded on
@@ -135,6 +142,24 @@ Optional metadata fields: `context`, `people` (JSON, with per-person consent),
   `cache-control: public, max-age=31536000, immutable` — never preview-style
   URLs that expire. Renditions (`?w=640|1080|1600|2048`) are the CDN worker's
   job; the API stores the original so no new asset inherits a size cap.
+
+### Upload & review in the browser
+
+Two pages put the upload path behind a UI for non-technical users:
+
+- **`/upload`** — drag in (or pick) one or many photos at once. Each is
+  uploaded, de-duplicated, stored, and AI-manifested as above, with per-file
+  progress.
+- **`/uploads`** — the completed-uploads review page: recent assets newest
+  first, each an editable card. Add the things Gemini can't know — a person's
+  name, the exact product, usage rights — and save; the entry is re-embedded so
+  it's findable straight away.
+
+Because asset writes are never open, these pages sign in once with the
+`ASSET_LIBRARY_TOKEN` and exchange it (at `POST /api/session`) for an httpOnly
+session cookie — the raw token never reaches client JavaScript. Programmatic
+clients keep using the `Authorization: Bearer` header. Video upload and the
+frames pipeline land in a follow-up.
 
 Uploaded assets are inserted into the in-process search index immediately
 (embedded on the spot, human-context first), so `GET /api/search?q=Kellie`
