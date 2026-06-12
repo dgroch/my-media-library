@@ -469,6 +469,12 @@ main {
   border-color: var(--accent);
 }
 
+.card-actions {
+  display: flex;
+  gap: 6px;
+  pointer-events: auto;
+}
+
 .open-link {
   pointer-events: auto;
   width: 26px;

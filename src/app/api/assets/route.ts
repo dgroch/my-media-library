@@ -71,6 +71,8 @@ export async function POST(request: Request) {
   if (onSimilar !== "accept" && onSimilar !== "reject") {
     return errorJson(400, "Invalid `on_similar`: must be `accept` or `reject`.");
   }
+  // Opt-in: strip on-screen text / captions / Instagram chrome before storing.
+  const cleanup = form.get("remove_chrome") === "true";
 
   try {
     if (!(await manifestSupportsUploads())) {
@@ -111,6 +113,7 @@ export async function POST(request: Request) {
       filename,
       metadata,
       onSimilar,
+      cleanup,
     });
 
     if (result.kind === "deduped") {
