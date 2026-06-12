@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+
 import type { Asset } from "@/lib/types";
 
 interface Props {
@@ -41,18 +43,28 @@ export default function AssetCard({
         ) : (
           <span />
         )}
-        {openHref && (
-          <a
+        <div className="card-actions">
+          <Link
             className="open-link"
-            href={openHref}
-            target="_blank"
-            rel="noreferrer"
-            title={isVideo ? "Open video" : "Open full size"}
+            href={`/a/${asset.id}`}
+            title="Edit details / tag"
             onClick={(e) => e.stopPropagation()}
           >
-            ↗
-          </a>
-        )}
+            ✎
+          </Link>
+          {openHref && (
+            <a
+              className="open-link"
+              href={openHref}
+              target="_blank"
+              rel="noreferrer"
+              title={isVideo ? "Open video" : "Open full size"}
+              onClick={(e) => e.stopPropagation()}
+            >
+              ↗
+            </a>
+          )}
+        </div>
       </div>
 
       {isVideo && <span className="badge">▶ Video</span>}

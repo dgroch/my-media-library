@@ -77,6 +77,7 @@ function Uploader() {
   const [uploadedBy, setUploadedBy] = useState("");
   const [source, setSource] = useState("");
   const [onSimilar, setOnSimilar] = useState<"accept" | "reject">("accept");
+  const [removeChromeImages, setRemoveChromeImages] = useState(false);
   const [running, setRunning] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -118,6 +119,7 @@ function Uploader() {
     const form = new FormData();
     form.append("file", row.file);
     appendMetadata(form);
+    if (removeChromeImages) form.append("remove_chrome", "true");
     try {
       const res = await fetch("/api/assets", { method: "POST", body: form });
       const data: UploadResponse = await res.json();
@@ -273,6 +275,15 @@ function Uploader() {
             </select>
           </label>
         </div>
+        <label className="checkbox-row">
+          <input
+            type="checkbox"
+            checked={removeChromeImages}
+            onChange={(e) => setRemoveChromeImages(e.target.checked)}
+          />
+          Remove captions / on-screen text from photos (Instagram stories, OSTs)
+          — leave off for clean shots
+        </label>
       </div>
 
       <div

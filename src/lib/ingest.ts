@@ -21,6 +21,7 @@ import {
   type ManifestEntry,
 } from "./assets";
 import { geminiConfigured, uploadConfig } from "./config";
+import { removeOverlays } from "./cleanup";
 import { embedQuery } from "./embeddings";
 import { manifestImage, type AssetManifest } from "./gemini";
 import { hammingDistance, perceptualHash } from "./phash";
@@ -59,6 +60,8 @@ export interface IngestParams {
   onSimilar: "accept" | "reject";
   /** Run Gemini manifesting (default true). */
   runManifest?: boolean;
+  /** Strip on-screen text / captions / reel chrome before storing (Gemini). */
+  cleanup?: boolean;
 }
 
 /**
@@ -101,8 +104,24 @@ export async function ingestImage(params: IngestParams): Promise<IngestResult> {
     throw new Error("File does not decode as a supported image.");
   }
 
+  // Optional cleanup: strip on-screen text / captions / reel chrome before the
+  // image is fingerprinted and stored, so the stored asset (and its manifest)
+  // is the clean version. Best-effort — returns the original if Gemini image
+  // editing isn't configured or the call fails. Output is JPEG when it ran.
+  let image = params.image;
+  let storedMime = params.storedMime;
+  let ext = params.ext;
+  if (params.cleanup) {
+    const cleaned = await removeOverlays(image, storedMime);
+    if (cleaned !== image) {
+      image = cleaned;
+      storedMime = "image/jpeg";
+      ext = "jpg";
+    }
+  }
+
   // Layer 2 — near-duplicate advisory across every known pHash.
-  const phash = await perceptualHash(params.image);
+  const phash = await perceptualHash(image);
   const similar: SimilarHit[] = knownPhashCandidates()
     .map((c) => ({ id: c.id, url: c.url, distance: hammingDistance(phash, c.phash) }))
     .filter((c) => c.distance <= uploadConfig.similarDistance)
@@ -117,12 +136,12 @@ export async function ingestImage(params: IngestParams): Promise<IngestResult> {
   const slug = assetSlug(
     params.metadata.context ?? "",
     params.filename,
-    params.ext,
+    ext,
     sha256,
   );
   const key = `${uploadConfig.storagePrefix}${slug}`;
-  const put = await r2PutObject(r2, key, params.image, {
-    contentType: params.storedMime,
+  const put = await r2PutObject(r2, key, image, {
+    contentType: storedMime,
     cacheControl: "public, max-age=31536000, immutable",
   });
   if (!put.ok) {
@@ -135,7 +154,7 @@ export async function ingestImage(params: IngestParams): Promise<IngestResult> {
   let entry = await createAssetEntry({
     filename: slug,
     url,
-    mimeType: params.storedMime,
+    mimeType: storedMime,
     sha256,
     phash,
     metadata: params.metadata,
@@ -145,10 +164,10 @@ export async function ingestImage(params: IngestParams): Promise<IngestResult> {
   let manifest: AssetManifest | null = null;
   if ((params.runManifest ?? true) && geminiConfigured()) {
     try {
-      const meta = await sharp(params.image).metadata();
+      const meta = await sharp(image).metadata();
       manifest = await manifestImage({
-        buffer: params.image,
-        mimeType: params.storedMime,
+        buffer: image,
+        mimeType: storedMime,
         filename: slug,
         width: meta.width,
         height: meta.height,
