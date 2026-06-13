@@ -31,6 +31,7 @@ const HUMAN_TEXT_PROPS = [
   ["Product", "Product"],
   ["Location", "Location"],
   ["Shoot", "Shoot"],
+  ["Source", "Source"],
   ["Tags", "Tags"],
 ];
 
@@ -354,6 +355,7 @@ function toRecord(page) {
   const people = parsePeopleNames(plainText(p["People"]));
   const product = plainText(p["Product"]);
   const location = plainText(p["Location"]);
+  const source = plainText(p["Source"]);
   const tags = readTags(p["Tags"]);
   const phash = plainText(p["pHash"]);
 
@@ -382,6 +384,7 @@ function toRecord(page) {
     people,
     product,
     location,
+    source,
     tags,
     phash,
     createdTime: page.created_time ?? "",
@@ -488,7 +491,7 @@ async function main() {
       const { text, ...rest } = r; // metadata only — no vector in the JSON
       // Drop empty human-channel fields so the meta file doesn't bloat for
       // the (initially vast) majority of rows without them.
-      for (const key of ["context", "people", "product", "location", "tags", "phash"]) {
+      for (const key of ["context", "people", "product", "location", "source", "tags", "phash"]) {
         const v = rest[key];
         if (v === "" || (Array.isArray(v) && v.length === 0)) delete rest[key];
       }
