@@ -82,6 +82,8 @@ function summariseImage(res: UploadResponse): { status: RowStatus; message: stri
 function Uploader() {
   const [rows, setRows] = useState<Row[]>([]);
   const [context, setContext] = useState("");
+  const [product, setProduct] = useState("");
+  const [tags, setTags] = useState("");
   const [uploadedBy, setUploadedBy] = useState("");
   const [source, setSource] = useState("");
   const [onSimilar, setOnSimilar] = useState<"accept" | "reject">("accept");
@@ -117,6 +119,12 @@ function Uploader() {
 
   function appendMetadata(form: FormData) {
     if (context.trim()) form.append("context", context.trim());
+    if (product.trim()) form.append("product", product.trim());
+    const tagList = tags
+      .split(",")
+      .map((t) => t.trim())
+      .filter(Boolean);
+    if (tagList.length) form.append("tags", JSON.stringify(tagList));
     if (uploadedBy.trim()) form.append("uploaded_by", uploadedBy.trim());
     if (source.trim()) form.append("source", source.trim());
     form.append("on_similar", onSimilar);
@@ -273,6 +281,26 @@ function Uploader() {
             onChange={(e) => setContext(e.target.value)}
           />
         </label>
+        <div className="upload-fields-row">
+          <label>
+            Product
+            <input
+              className="search-input"
+              placeholder="e.g. Marseille"
+              value={product}
+              onChange={(e) => setProduct(e.target.value)}
+            />
+          </label>
+          <label>
+            Tags (comma-separated)
+            <input
+              className="search-input"
+              placeholder="e.g. studio, hero, autumn"
+              value={tags}
+              onChange={(e) => setTags(e.target.value)}
+            />
+          </label>
+        </div>
         <div className="upload-fields-row">
           <label>
             Uploaded by
