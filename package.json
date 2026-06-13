@@ -10,6 +10,7 @@
     "setup:collections": "node scripts/setup-collections.mjs",
     "setup:upload": "node scripts/setup-upload.mjs",
     "convert:multiselect": "node scripts/convert-multiselect.mjs",
+    "worker:video": "node --conditions=react-server --import tsx scripts/video-worker.ts",
     "build:index": "node scripts/build-index.mjs",
     "upload:index": "node scripts/upload-index.mjs",
     "fetch:index": "node scripts/fetch-index.mjs",
@@ -23,7 +24,9 @@
     "next": "^16.2.6",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
-    "sharp": "^0.34.5"
+    "server-only": "^0.0.1",
+    "sharp": "^0.34.5",
+    "tsx": "^4.22.4"
   },
   "devDependencies": {
     "@types/node": "^22",

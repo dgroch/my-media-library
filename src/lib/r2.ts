@@ -53,6 +53,47 @@ export function assetsR2Config(): R2Config | null {
   };
 }
 
+/**
+ * R2 config for the durable video queue (job records + source clips). Defaults
+ * to the same credentials/bucket as asset uploads, but can point at a separate
+ * (ideally private) bucket via `VIDEO_QUEUE_*`. Used by the web service (to
+ * enqueue) and the background worker (to claim/process).
+ */
+export function videoQueueR2Config(): R2Config | null {
+  const accountId =
+    process.env.VIDEO_QUEUE_R2_ACCOUNT_ID ||
+    process.env.ASSET_R2_ACCOUNT_ID ||
+    process.env.R2_ACCOUNT_ID;
+  const accessKeyId =
+    process.env.VIDEO_QUEUE_R2_ACCESS_KEY_ID ||
+    process.env.ASSET_R2_ACCESS_KEY_ID ||
+    process.env.R2_ACCESS_KEY_ID;
+  const secretAccessKey =
+    process.env.VIDEO_QUEUE_R2_SECRET_ACCESS_KEY ||
+    process.env.ASSET_R2_SECRET_ACCESS_KEY ||
+    process.env.R2_SECRET_ACCESS_KEY;
+  const bucket =
+    process.env.VIDEO_QUEUE_BUCKET ||
+    process.env.ASSET_R2_BUCKET ||
+    process.env.R2_BUCKET;
+  if (!accountId || !accessKeyId || !secretAccessKey || !bucket) return null;
+  return {
+    accessKeyId,
+    secretAccessKey,
+    bucket,
+    region:
+      process.env.VIDEO_QUEUE_R2_REGION ||
+      process.env.ASSET_R2_REGION ||
+      process.env.R2_REGION ||
+      "auto",
+    endpoint:
+      process.env.VIDEO_QUEUE_R2_ENDPOINT ||
+      process.env.ASSET_R2_ENDPOINT ||
+      process.env.R2_ENDPOINT ||
+      `https://${accountId}.r2.cloudflarestorage.com`,
+  };
+}
+
 // YYYYMMDDTHHMMSSZ from an ISO timestamp.
 function amzDate(now: Date): string {
   return now.toISOString().replace(/[:-]/g, "").replace(/\.\d{3}/, "");
@@ -84,9 +125,105 @@ export async function r2DeleteObject(
   return r2Request(cfg, "DELETE", key, {});
 }
 
+/** GET an object's bytes. Throws on non-2xx. */
+export async function r2GetObject(cfg: R2Config, key: string): Promise<Buffer> {
+  const res = await r2Request(cfg, "GET", key, {});
+  if (!res.ok) {
+    throw new Error(`R2 GET ${key} failed (${res.status})`);
+  }
+  return Buffer.from(await res.arrayBuffer());
+}
+
+// RFC-3986 encoding (S3 also encodes ! ' ( ) * which encodeURIComponent skips).
+function awsEncode(value: string): string {
+  return encodeURIComponent(value).replace(
+    /[!'()*]/g,
+    (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase(),
+  );
+}
+
+/**
+ * List object keys under a prefix (ListObjectsV2). Single page, up to 1000 keys
+ * — plenty for a job queue. Signs the canonical query string per SigV4.
+ */
+export async function r2ListObjects(
+  cfg: R2Config,
+  prefix: string,
+): Promise<string[]> {
+  const params: Record<string, string> = {
+    "list-type": "2",
+    "max-keys": "1000",
+    prefix,
+  };
+  const canonicalQuery = Object.keys(params)
+    .sort()
+    .map((k) => `${awsEncode(k)}=${awsEncode(params[k])}`)
+    .join("&");
+
+  const url = new URL(`${cfg.endpoint}/${cfg.bucket}?${canonicalQuery}`);
+  const now = new Date();
+  const date = amzDate(now);
+  const dateStamp = date.slice(0, 8);
+  const payloadHash = sha256hex("");
+
+  const headers: Record<string, string> = {
+    host: url.host,
+    "x-amz-content-sha256": payloadHash,
+    "x-amz-date": date,
+  };
+  const names = Object.keys(headers).map((h) => h.toLowerCase()).sort();
+  const canonicalHeaders = names.map((h) => `${h}:${headers[h]}\n`).join("");
+  const signedHeaders = names.join(";");
+  const canonicalUri = url.pathname.split("/").map(encodeURIComponent).join("/");
+
+  const canonicalRequest = [
+    "GET",
+    canonicalUri,
+    canonicalQuery,
+    canonicalHeaders,
+    signedHeaders,
+    payloadHash,
+  ].join("\n");
+
+  const scope = `${dateStamp}/${cfg.region}/s3/aws4_request`;
+  const stringToSign = [
+    "AWS4-HMAC-SHA256",
+    date,
+    scope,
+    sha256hex(canonicalRequest),
+  ].join("\n");
+  const kDate = hmac(`AWS4${cfg.secretAccessKey}`, dateStamp);
+  const kRegion = hmac(kDate, cfg.region);
+  const kService = hmac(kRegion, "s3");
+  const kSigning = hmac(kService, "aws4_request");
+  const signature = createHmac("sha256", kSigning)
+    .update(stringToSign)
+    .digest("hex");
+  const authorization =
+    `AWS4-HMAC-SHA256 Credential=${cfg.accessKeyId}/${scope}, ` +
+    `SignedHeaders=${signedHeaders}, Signature=${signature}`;
+
+  const res = await fetch(url, {
+    method: "GET",
+    headers: { ...headers, Authorization: authorization },
+  });
+  if (!res.ok) {
+    throw new Error(`R2 LIST failed (${res.status}): ${(await res.text()).slice(0, 200)}`);
+  }
+  const xml = await res.text();
+  return [...xml.matchAll(/<Key>([^<]+)<\/Key>/g)].map((m) =>
+    m[1]
+      .replace(/&amp;/g, "&")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'"),
+  );
+}
+
 async function r2Request(
   cfg: R2Config,
-  method: "PUT" | "HEAD" | "DELETE",
+  method: "GET" | "PUT" | "HEAD" | "DELETE",
   key: string,
   {
     body,
