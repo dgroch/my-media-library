@@ -95,3 +95,56 @@ services:
       # Web service deploy hook — pinged after upload so the new index goes live.
       - key: RENDER_DEPLOY_HOOK_URL
         sync: false
+
+  # Video frames worker: drains the durable R2 queue (POST /api/videos with
+  # choice=frames enqueues there). Runs the extract → select → cleanup → ingest
+  # pipeline off the web service, so a slow/large clip never blocks uploads and
+  # jobs survive redeploys. Single always-on worker, claims one job at a time.
+  - type: worker
+    name: video-worker
+    runtime: node
+    plan: starter
+    region: singapore
+    branch: main
+    # No `next build` — the worker runs the TypeScript pipeline via tsx.
+    buildCommand: npm ci
+    startCommand: npm run worker:video
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NOTION_TOKEN
+        sync: false
+      - key: NOTION_ASSETS_DATABASE_ID
+        value: 357fdc24-425f-81ed-805c-c4f9aff0665f
+      # Embeddings (each ingested frame is embedded for search).
+      - key: OPENAI_API_KEY
+        sync: false
+      # Gemini — frame scoring, caption/chrome cleanup, and AI manifesting.
+      - key: GEMINI_API_KEY
+        sync: false
+      # Where frames are stored + served (must match the web service exactly).
+      - key: ASSET_CDN_BASE_URL
+        sync: false
+      - key: ASSET_STORAGE_PREFIX
+        sync: false
+      # Brand R2 (read/WRITE) — stores the cleaned frames. Same as the web
+      # service's asset upload creds.
+      - key: ASSET_R2_ACCOUNT_ID
+        sync: false
+      - key: ASSET_R2_ACCESS_KEY_ID
+        sync: false
+      - key: ASSET_R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: ASSET_R2_BUCKET
+        sync: false
+      # Queue storage (job records + source clips). Defaults to the brand R2
+      # creds above under the `video-queue/` prefix; set VIDEO_QUEUE_* to use a
+      # separate (private) bucket. R2_* is the final fallback.
+      - key: R2_ACCOUNT_ID
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET
+        sync: false

@@ -184,10 +184,21 @@ clients keep using the `Authorization: Bearer` header.
      (dedup, store, Gemini manifest) and shows up on `/uploads` to tag.
 
   The primary use case is turning UGC-creator Instagram reels into clean,
-  on-brand stills. Frame jobs run in-process and their state is in-memory (lost
-  on a redeploy); fine for this low-volume internal tool. Overlay removal needs
-  a Google-native `GEMINI_API_KEY` (see `GEMINI_IMAGE_MODEL`); with only an
-  OpenRouter key, cleanup is the conservative sharp pass alone.
+  on-brand stills. Overlay removal needs a Google-native `GEMINI_API_KEY` (see
+  `GEMINI_IMAGE_MODEL`); with only an OpenRouter key, cleanup is the
+  conservative sharp pass alone.
+
+  **Durable queue + background worker.** `POST /api/videos` (choice=frames)
+  stores the clip and a job record in R2 and returns immediately; a separate
+  **`video-worker`** service (`npm run worker:video`, a Render `type: worker` —
+  see `render.yaml`) claims one job at a time and runs the whole pipeline off
+  the web service. So a slow/large clip never blocks uploads, and jobs survive
+  redeploys. The worker reuses the app's pipeline modules directly (run with
+  `node --conditions=react-server --import tsx`, which neutralises their
+  `import "server-only"`). One consequence of processing off-web: video frames
+  become searchable after the next `reindex` (the `/uploads` review page lists
+  them from Notion immediately, like Drive-synced assets). See the
+  `VIDEO_QUEUE_*` env in `.env.local.example`.
 
 Uploaded assets are inserted into the in-process search index immediately
 (embedded on the spot, human-context first), so `GET /api/search?q=Kellie`

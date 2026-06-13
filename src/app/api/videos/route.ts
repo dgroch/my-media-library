@@ -12,7 +12,7 @@ import { checkAssetWriteAuth } from "@/lib/auth";
 import { uploadConfig } from "@/lib/config";
 import { ingestVideoFile } from "@/lib/ingest";
 import { assetsR2Config } from "@/lib/r2";
-import { startFrameJob } from "@/lib/videoJobs";
+import { enqueueFrameJob } from "@/lib/videoJobs";
 
 export const dynamic = "force-dynamic";
 
@@ -112,7 +112,8 @@ export async function POST(request: Request) {
       return errorJson(500, "Unexpected ingest result.");
     }
 
-    const jobId = startFrameJob({
+    // Persist to the durable queue; the background worker processes it.
+    const jobId = await enqueueFrameJob({
       videoBuffer: bytes,
       ext,
       filename,
