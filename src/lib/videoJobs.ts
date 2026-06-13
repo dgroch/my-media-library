@@ -101,15 +101,22 @@ function baseName(filename: string): string {
 }
 
 async function runFrameJob(job: VideoJob, input: FrameJobInput): Promise<void> {
+  const t0 = Date.now();
+  const tag = `[frames ${job.id.slice(0, 8)}]`;
   try {
     update(job, { step: "Extracting frames…" });
+    console.log(
+      `${tag} extracting — ${input.filename} (${(input.videoBuffer.length / 1e6).toFixed(1)} MB, .${input.ext})`,
+    );
     const { frames } = await extractCandidateFrames(input.videoBuffer, input.ext);
+    console.log(`${tag} extracted ${frames.length} candidate frames (${Date.now() - t0}ms)`);
     if (frames.length === 0) {
       throw new Error("No frames could be extracted from the video.");
     }
 
     update(job, { step: "Selecting unique scenes & best shots…" });
     const selected = await selectBestFrames(frames);
+    console.log(`${tag} selected ${selected.length} scenes`);
     if (selected.length === 0) {
       throw new Error("No usable scenes were found in the video.");
     }
@@ -121,6 +128,7 @@ async function runFrameJob(job: VideoJob, input: FrameJobInput): Promise<void> {
       update(job, {
         step: `Cleaning up & filing scene ${i + 1} of ${selected.length}…`,
       });
+      console.log(`${tag} scene ${i + 1}/${selected.length} — cleanup + ingest`);
       const cleaned = await cleanupFrame(frame.buffer, "image/jpeg", {
         removeChrome: input.removeChrome,
       });
@@ -148,8 +156,11 @@ async function runFrameJob(job: VideoJob, input: FrameJobInput): Promise<void> {
     }
 
     update(job, { status: "done", step: "Done" });
+    console.log(
+      `${tag} done — ${job.frames.length} filed in ${((Date.now() - t0) / 1000).toFixed(1)}s`,
+    );
   } catch (err) {
-    console.error("video frame job failed", err);
+    console.error(`${tag} FAILED after ${Date.now() - t0}ms —`, err);
     update(job, {
       status: "error",
       step: "Failed",

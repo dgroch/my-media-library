@@ -179,11 +179,20 @@ function Uploader() {
   }
 
   async function pollJob(rowId: string, jobId: string) {
+    const startedAt = Date.now();
+    const HARD_MS = 20 * 60 * 1000; // overall ceiling
+    const STALL_MS = 4 * 60 * 1000; // no-progress watchdog
+    let lastSig = "";
+    let lastChange = Date.now();
     for (;;) {
       await new Promise((r) => setTimeout(r, 1600));
       const res = await fetch(`/api/videos/jobs/${jobId}`);
       const job: JobResponse & { error?: string } = await res.json();
-      if (!res.ok) throw new Error(job.error ?? "Lost track of the job.");
+      if (!res.ok) {
+        throw new Error(
+          job.error ?? "Lost track of the job (it may have expired) — try again.",
+        );
+      }
       update(rowId, {
         step: job.step,
         processed: job.processed,
@@ -200,6 +209,18 @@ function Uploader() {
       if (job.status === "error") {
         update(rowId, { status: "error", message: job.error ?? "Processing failed." });
         return;
+      }
+      // Watchdogs: a stuck job must not hold the uploader open forever.
+      const sig = `${job.step}|${job.processed}|${job.totalScenes}`;
+      if (sig !== lastSig) {
+        lastSig = sig;
+        lastChange = Date.now();
+      }
+      if (Date.now() - lastChange > STALL_MS) {
+        throw new Error(`Stalled at "${job.step}" (no progress for 4 min) — try again.`);
+      }
+      if (Date.now() - startedAt > HARD_MS) {
+        throw new Error("Timed out after 20 min — try a shorter clip or re-upload.");
       }
     }
   }
