@@ -11,7 +11,7 @@ import "server-only";
 
 import sharp from "sharp";
 
-import { geminiImageEditConfigured } from "./config";
+import { geminiImageConfig, geminiImageEditConfigured } from "./config";
 import { editImage } from "./gemini";
 
 const OVERLAY_PROMPT =
@@ -44,21 +44,22 @@ export async function removeOverlays(
 ): Promise<Buffer> {
   if (!geminiImageEditConfigured()) {
     console.warn(
-      "cleanup: overlay removal skipped — Gemini image editing not configured (set a Google-native GEMINI_API_KEY).",
+      "[overlay-removal] SKIPPED — no Gemini image key (set GEMINI_API_KEY or GOOGLE_API_KEY).",
     );
     return buffer;
   }
+  console.log(
+    `[overlay-removal] start — model=${geminiImageConfig.model}, input=${buffer.length} bytes`,
+  );
   try {
     const edited = await editImage({ buffer, mimeType, prompt: OVERLAY_PROMPT });
     // Normalise back to JPEG so downstream (dedup, CDN) sees one format.
     const out = await sharp(edited.buffer).jpeg({ quality: 92 }).toBuffer();
-    console.log(
-      `cleanup: overlay removal applied (${buffer.length} → ${out.length} bytes).`,
-    );
+    console.log(`[overlay-removal] OK — ${buffer.length} → ${out.length} bytes`);
     return out;
   } catch (err) {
     console.error(
-      "cleanup: overlay removal failed, keeping original —",
+      "[overlay-removal] FAILED, keeping original —",
       err instanceof Error ? err.message : err,
     );
     return buffer;
