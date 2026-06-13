@@ -169,11 +169,17 @@ export async function extractCandidateFrames(
   try {
     await writeFile(input, videoBuffer);
     const meta = await probeVideo(input);
+    console.log(
+      `[ffmpeg] probed — ${meta.durationSec.toFixed(1)}s, ${meta.width}x${meta.height}, ${meta.fps.toFixed(0)}fps`,
+    );
     if (!meta.durationSec || meta.durationSec <= 0) {
       throw new Error("Could not read video duration");
     }
     const scenes = await detectSceneTimestamps(input);
     const timestamps = planFrameTimestamps(meta, scenes, maxFrames);
+    console.log(
+      `[ffmpeg] ${scenes.length} scene cuts → extracting ${timestamps.length} frames`,
+    );
     const frames: ExtractedFrame[] = [];
     for (const t of timestamps) {
       try {
