@@ -35,6 +35,7 @@ interface MetaRecord {
   people?: string[];
   product?: string;
   location?: string;
+  source?: string;
   tags?: string[];
   phash?: string;
 }
@@ -53,6 +54,7 @@ interface HumanMeta {
   people: string[];
   product: string;
   location: string;
+  source: string;
   tags: string[];
 }
 
@@ -153,6 +155,7 @@ function loadIndex(): LoadedIndex | null {
       people: a.people ?? [],
       product: a.product ?? "",
       location: a.location ?? "",
+      source: a.source ?? "",
       tags: a.tags ?? [],
     }));
     const phashes = meta.assets.map((a) => a.phash ?? "");
@@ -195,6 +198,7 @@ function humanMetaOf(entry: ManifestEntry): HumanMeta {
     people: entry.people.map((p) => p.name).filter(Boolean),
     product: entry.product,
     location: entry.location,
+    source: entry.source,
     tags: entry.tags,
   };
 }
@@ -292,15 +296,42 @@ function keywordBoost(queryLower: string, human: HumanMeta): number {
   return boost;
 }
 
-/** Fraction of query terms found in the asset's text — fallback scoring for
- *  overlay entries that have no embedding yet. */
-function termMatchScore(terms: string[], haystackLower: string): number {
-  if (!terms.length) return 0;
+/** The full searchable text of an asset — title, AI description, and every
+ *  editable human field (so a value typed into any field is findable). */
+function searchHaystack(asset: Asset, human: HumanMeta): string {
+  return [
+    asset.title,
+    asset.description,
+    human.context,
+    human.people.join(" "),
+    human.product,
+    human.location,
+    human.source,
+    human.tags.join(" "),
+  ]
+    .filter(Boolean)
+    .join("\n")
+    .toLowerCase();
+}
+
+/**
+ * Decisive boost when the query (or its terms) appear verbatim anywhere in the
+ * asset's text — the "search what I typed" guarantee. A full-phrase hit scores
+ * 0.5 (cosine scores live in ~0–0.6, so an exact match ranks up front);
+ * otherwise it's the fraction of matched terms. Works for embedded and
+ * not-yet-embedded entries alike.
+ */
+function directHitBoost(
+  queryLower: string,
+  terms: string[],
+  haystack: string,
+): number {
+  if (!queryLower || !haystack) return 0;
+  if (queryLower.length >= 2 && haystack.includes(queryLower)) return 0.5;
+  if (terms.length === 0) return 0;
   let hits = 0;
-  for (const term of terms) {
-    if (haystackLower.includes(term)) hits++;
-  }
-  return (hits / terms.length) * 0.4;
+  for (const term of terms) if (term.length >= 2 && haystack.includes(term)) hits++;
+  return (hits / terms.length) * 0.45;
 }
 
 export async function semanticSearch(
@@ -352,33 +383,26 @@ export async function semanticSearch(
         for (let j = 0; j < dim; j++) dotp += qn[j] * vectors[off + j];
         scored.push({
           asset: assets[i],
-          score: dotp + keywordBoost(queryLower, human[i]),
+          score:
+            dotp +
+            keywordBoost(queryLower, human[i]) +
+            directHitBoost(queryLower, terms, searchHaystack(assets[i], human[i])),
         });
       }
     }
 
     for (const entry of overlayEntries) {
-      let score = keywordBoost(queryLower, entry.human);
+      const haystack = searchHaystack(entry.asset, entry.human);
+      let score =
+        keywordBoost(queryLower, entry.human) +
+        directHitBoost(queryLower, terms, haystack);
       if (entry.vector && qn && entry.vector.length === qn.length) {
         let dotp = 0;
         for (let j = 0; j < qn.length; j++) dotp += qn[j] * entry.vector[j];
         score += dotp;
-      } else {
-        // No embedding (yet) — fall back to plain term matching over the
-        // asset's text so a fresh upload is still findable by its context.
-        const haystack = [
-          entry.asset.title,
-          entry.asset.description,
-          entry.human.context,
-          entry.human.people.join(" "),
-          entry.human.product,
-          entry.human.location,
-          entry.human.tags.join(" "),
-        ]
-          .join(" ")
-          .toLowerCase();
-        score += termMatchScore(terms, haystack);
-        if (score <= 0) continue; // no signal at all — leave it out
+      } else if (score <= 0) {
+        // No embedding yet and no keyword/term signal — leave it out.
+        continue;
       }
       scored.push({ asset: entry.asset, score });
     }

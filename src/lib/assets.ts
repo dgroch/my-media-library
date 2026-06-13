@@ -235,6 +235,7 @@ export function embeddingTextForEntry(entry: ManifestEntry): string {
   if (entry.product) lines.push(`Product: ${entry.product}`);
   if (entry.location) lines.push(`Location: ${entry.location}`);
   if (entry.shoot) lines.push(`Shoot: ${entry.shoot}`);
+  if (entry.source) lines.push(`Source: ${entry.source}`);
   if (entry.tags.length) lines.push(`Tags: ${entry.tags.join(", ")}`);
   if (entry.description) lines.push(`Description: ${entry.description}`);
   return lines.join("\n");
