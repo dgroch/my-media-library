@@ -11,7 +11,7 @@
     "setup:upload": "node scripts/setup-upload.mjs",
     "convert:multiselect": "node scripts/convert-multiselect.mjs",
     "worker:video": "node --conditions=react-server --import tsx scripts/video-worker.ts",
-    "build:index": "node scripts/build-index.mjs",
+    "build:index": "node --max-old-space-size=400 scripts/build-index.mjs",
     "upload:index": "node scripts/upload-index.mjs",
     "fetch:index": "node scripts/fetch-index.mjs",
     "reindex": "npm run build:index && npm run upload:index"

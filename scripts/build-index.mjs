@@ -241,13 +241,22 @@ async function queryDataSource(dataSourceId, body) {
   );
 }
 
+// Rows fetched across all queries (raw count, incl. archived) — final log.
+let rawRowsFetched = 0;
+
 // Page through one query until has_more is false or the 10k cap is reached.
+// Every page of results is converted to slim index records IMMEDIATELY and the
+// raw Notion page objects dropped: raw pages carry every property in full
+// (10–20KB each), and holding tens of thousands of them is what OOM'd the
+// 512MB cron on July 13 — the slim records are ~10x smaller. Archived/trashed
+// rows are skipped here for the same reason.
 // `capped: true` means the result may be incomplete and the range must be
 // split (Notion reports has_more=false at the cap, so hitting exactly 10k is
 // itself the signal — worst case a genuinely-10k range gets sharded once for
 // nothing).
 async function walkQuery(dataSourceId, filter, label) {
-  const rows = [];
+  const records = [];
+  let fetched = 0;
   let cursor;
   do {
     const res = await queryDataSource(dataSourceId, {
@@ -255,12 +264,19 @@ async function walkQuery(dataSourceId, filter, label) {
       ...(filter ? { filter } : {}),
       ...(cursor ? { start_cursor: cursor } : {}),
     });
-    rows.push(...res.results);
+    fetched += res.results.length;
+    rawRowsFetched += res.results.length;
+    for (const page of res.results) {
+      if (page.archived || page.in_trash) continue;
+      records.push(toRecord(page));
+    }
     cursor = res.has_more ? res.next_cursor : undefined;
-    process.stdout.write(`\r  fetched ${rows.length} rows${label}…`);
-    if (rows.length >= NOTION_QUERY_CAP) return { rows, capped: true };
+    if (fetched % 1000 === 0 || !cursor || fetched >= NOTION_QUERY_CAP) {
+      process.stdout.write(`\r  fetched ${fetched} rows${label}…`);
+    }
+    if (fetched >= NOTION_QUERY_CAP) return { records, capped: true };
   } while (cursor);
-  return { rows, capped: false };
+  return { records, capped: false };
 }
 
 function createdTimeRangeFilter(start, end) {
@@ -272,31 +288,37 @@ function createdTimeRangeFilter(start, end) {
   };
 }
 
+// created_time of each record as sorted epoch-ms — the only thing the shard
+// splitter needs from a capped fetch, so the records themselves can be freed
+// before recursing (an incomplete shard's records get refetched anyway).
+function createdTimesOf(records) {
+  return records
+    .map((r) => Date.parse(r.createdTime))
+    .filter(Number.isFinite)
+    .sort((a, b) => a - b);
+}
+
 // Pick a split point for [start, end): the median created_time of the rows the
 // capped attempt did return. That splits the actual data mass (a time-midpoint
 // can waste whole fetches on empty halves when imports cluster) and never
 // relies on Notion sort behaviour — sort-derived edges are what silently
 // collapsed the index to one month on July 12. Falls back to the midpoint, and
 // returns null when the range can't be narrowed further.
-function splitPoint(sampleRows, start, end) {
+function splitPoint(sampleTimes, start, end) {
   const startMs = Date.parse(start);
   const endMs = Date.parse(end);
-  const times = sampleRows
-    .map((r) => Date.parse(r.created_time))
-    .filter(Number.isFinite)
-    .sort((a, b) => a - b);
-  let mid = times[Math.floor(times.length / 2)];
+  let mid = sampleTimes[Math.floor(sampleTimes.length / 2)];
   if (!(mid > startMs && mid < endMs)) mid = startMs + (endMs - startMs) / 2;
   mid = Math.round(mid);
   if (!(mid > startMs && mid < endMs)) return null;
   return new Date(mid).toISOString();
 }
 
-async function fetchCreatedRange(dataSourceId, start, end, sampleRows, depth) {
+async function fetchCreatedRange(dataSourceId, start, end, sampleTimes, depth) {
   if (depth > MAX_SHARD_DEPTH) {
     throw new Error(`created_time sharding exceeded depth ${MAX_SHARD_DEPTH}`);
   }
-  const mid = splitPoint(sampleRows, start, end);
+  const mid = splitPoint(sampleTimes, start, end);
   if (!mid) {
     throw new Error(
       `cannot narrow ${start}..${end} below the ${NOTION_QUERY_CAP}-row query cap`,
@@ -305,34 +327,38 @@ async function fetchCreatedRange(dataSourceId, start, end, sampleRows, depth) {
   const out = [];
   // Half-open halves [start, mid) and [mid, end) — no overlap, no gap.
   for (const [s, e] of [[start, mid], [mid, end]]) {
-    const { rows, capped } = await walkQuery(
+    let { records, capped } = await walkQuery(
       dataSourceId,
       createdTimeRangeFilter(s, e),
       ` in ${s.slice(0, 19)}..${e.slice(0, 19)}`,
     );
-    out.push(
-      ...(capped
-        ? await fetchCreatedRange(dataSourceId, s, e, rows, depth + 1)
-        : rows),
-    );
+    if (capped) {
+      const times = createdTimesOf(records);
+      records = null; // free the incomplete shard before recursing
+      records = await fetchCreatedRange(dataSourceId, s, e, times, depth + 1);
+    }
+    for (const r of records) out.push(r);
   }
   return out;
 }
 
-// Fetch the ENTIRE manifest. Try a single unfiltered walk first — complete
-// whenever the library is under Notion's 10k-per-query cap. Past the cap,
-// re-fetch in created_time shards, bisecting any shard that itself caps out.
+// Fetch the ENTIRE manifest as slim records. Try a single unfiltered walk
+// first — complete whenever the library is under Notion's 10k-per-query cap.
+// Past the cap, re-fetch in created_time shards, bisecting any shard that
+// itself caps out.
 async function fetchAllRows(dataSourceId) {
-  const { rows, capped } = await walkQuery(dataSourceId, undefined, "");
+  let { records, capped } = await walkQuery(dataSourceId, undefined, "");
   if (!capped) {
     process.stdout.write("\n");
-    return rows;
+    return records;
   }
   console.warn(
     `\n⚠ Notion ended the walk at its ${NOTION_QUERY_CAP}-result query cap; re-fetching in created_time shards…`,
   );
+  const times = createdTimesOf(records);
+  records = null; // free the truncated walk before the sharded refetch
   const ceiling = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-  const all = await fetchCreatedRange(dataSourceId, RANGE_FLOOR, ceiling, rows, 0);
+  const all = await fetchCreatedRange(dataSourceId, RANGE_FLOOR, ceiling, times, 0);
   process.stdout.write("\n");
   return all;
 }
@@ -520,11 +546,10 @@ async function main() {
   const dataSourceId = await resolveDataSource();
 
   console.log("→ Fetching manifest rows…");
-  const pages = await fetchAllRows(dataSourceId);
-  const activePages = pages.filter((page) => !page.archived && !page.in_trash);
-  const records = dedupeRecords(activePages.map(toRecord));
+  const active = await fetchAllRows(dataSourceId);
+  const records = dedupeRecords(active);
   console.log(
-    `  ${pages.length} rows fetched; ${activePages.length} active; ${records.length} unique assets after Drive File ID dedupe`,
+    `  ${rawRowsFetched} rows fetched; ${active.length} active; ${records.length} unique assets after Drive File ID dedupe`,
   );
 
   console.log(`→ Embedding (${model}, ${dimensions}d)…`);
