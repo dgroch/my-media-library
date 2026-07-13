@@ -385,7 +385,20 @@ async function relationIds(page: any): Promise<string[]> {
   return ids;
 }
 
+/**
+ * True when `id` looks like a Notion page id (UUID, dashed or not). Dynamic
+ * routes like /api/collections/[id] happily match path segments such as
+ * "search", and passing those through to pages.retrieve makes the Notion
+ * client log a validation error on every hit — reject them up front.
+ */
+export function isNotionPageId(id: string): boolean {
+  return /^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}$/i.test(
+    id,
+  );
+}
+
 export async function getCollection(id: string): Promise<Collection | null> {
+  if (!isNotionPageId(id)) return null;
   let page: any;
   try {
     page = await notion().pages.retrieve({ page_id: id });

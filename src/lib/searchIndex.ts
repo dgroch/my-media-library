@@ -7,6 +7,7 @@ import type { ManifestEntry } from "./assets";
 import { ASSET_INDEX_PATH } from "./config";
 import { embedQuery } from "./embeddings";
 import type { MediaType } from "./media";
+import { indexR2Config, r2GetObject, r2HeadObject } from "./r2";
 import type { Asset, SearchResponse } from "./types";
 
 // The index is produced by `npm run build:index` as two files:
@@ -60,6 +61,8 @@ interface HumanMeta {
 
 interface LoadedIndex {
   dim: number;
+  /** builtAt of the meta file this index came from. */
+  builtAt: string;
   /** All asset vectors concatenated and unit-normalised, length count*dim. */
   vectors: Float32Array;
   assets: Asset[];
@@ -83,6 +86,13 @@ interface RuntimeEntry {
 
 const MAX_HITS = 300;
 
+// Minimum score for a hit to appear in results. Cosine scores for this model
+// at 512d sit roughly in 0–0.6, with unrelated content near 0.0–0.1 — so a
+// nonsense query returns few or no results instead of confident pages of
+// nearest neighbours. Keyword/direct-hit boosts (0.15–0.5) clear this floor
+// easily, preserving the "search what I typed" guarantee.
+const MIN_SCORE = Number(process.env.SEARCH_MIN_SCORE ?? "0.1");
+
 const runtime = new Map<string, RuntimeEntry>();
 
 // Tombstones: assets archived/deleted at runtime. semanticSearch and
@@ -103,78 +113,78 @@ function resolve(p: string): string {
   return path.isAbsolute(p) ? p : path.join(process.cwd(), p);
 }
 
+function buildLoadedIndex(meta: MetaFile, buf: Buffer): LoadedIndex | null {
+  if (!meta.assets?.length || !meta.dimensions) return null;
+
+  const vectors = new Float32Array(
+    buf.buffer,
+    buf.byteOffset,
+    Math.floor(buf.byteLength / 4),
+  );
+
+  const dim = meta.dimensions;
+  const count = meta.assets.length;
+  if (vectors.length < count * dim) {
+    console.error("index vector file is smaller than expected");
+    return null;
+  }
+
+  // Unit-normalise each vector in place so search is a plain dot product.
+  for (let i = 0; i < count; i++) {
+    const off = i * dim;
+    let s = 0;
+    for (let j = 0; j < dim; j++) {
+      const x = vectors[off + j];
+      s += x * x;
+    }
+    const inv = s > 0 ? 1 / Math.sqrt(s) : 0;
+    for (let j = 0; j < dim; j++) vectors[off + j] *= inv;
+  }
+
+  const assets: Asset[] = meta.assets.map((a) => ({
+    id: a.id,
+    title: a.title,
+    url: a.url,
+    description: a.description,
+    mediaType: a.mediaType,
+    driveLink: a.driveLink,
+  }));
+  const human: HumanMeta[] = meta.assets.map((a) => ({
+    context: a.context ?? "",
+    people: a.people ?? [],
+    product: a.product ?? "",
+    location: a.location ?? "",
+    source: a.source ?? "",
+    tags: a.tags ?? [],
+  }));
+  const phashes = meta.assets.map((a) => a.phash ?? "");
+  const ids = new Set(assets.map((a) => a.id));
+  const createdTimes = meta.assets.map((a) => a.createdTime);
+  const recencyOrder = assets
+    .map((_, i) => i)
+    .sort((a, b) => createdTimes[b].localeCompare(createdTimes[a]));
+
+  return {
+    dim,
+    builtAt: meta.builtAt ?? "",
+    vectors,
+    assets,
+    human,
+    phashes,
+    ids,
+    createdTimes,
+    recencyOrder,
+  };
+}
+
 function loadIndex(): LoadedIndex | null {
   if (loaded !== undefined) return loaded;
 
   try {
     const metaPath = resolve(ASSET_INDEX_PATH);
     const meta = JSON.parse(readFileSync(metaPath, "utf8")) as MetaFile;
-    if (!meta.assets?.length || !meta.dimensions) {
-      loaded = null;
-      return null;
-    }
-
     const binPath = metaPath.replace(/\.json$/, "") + ".vec.bin";
-    const buf = readFileSync(binPath);
-    const vectors = new Float32Array(
-      buf.buffer,
-      buf.byteOffset,
-      Math.floor(buf.byteLength / 4),
-    );
-
-    const dim = meta.dimensions;
-    const count = meta.assets.length;
-    if (vectors.length < count * dim) {
-      console.error("index vector file is smaller than expected");
-      loaded = null;
-      return null;
-    }
-
-    // Unit-normalise each vector in place so search is a plain dot product.
-    for (let i = 0; i < count; i++) {
-      const off = i * dim;
-      let s = 0;
-      for (let j = 0; j < dim; j++) {
-        const x = vectors[off + j];
-        s += x * x;
-      }
-      const inv = s > 0 ? 1 / Math.sqrt(s) : 0;
-      for (let j = 0; j < dim; j++) vectors[off + j] *= inv;
-    }
-
-    const assets: Asset[] = meta.assets.map((a) => ({
-      id: a.id,
-      title: a.title,
-      url: a.url,
-      description: a.description,
-      mediaType: a.mediaType,
-      driveLink: a.driveLink,
-    }));
-    const human: HumanMeta[] = meta.assets.map((a) => ({
-      context: a.context ?? "",
-      people: a.people ?? [],
-      product: a.product ?? "",
-      location: a.location ?? "",
-      source: a.source ?? "",
-      tags: a.tags ?? [],
-    }));
-    const phashes = meta.assets.map((a) => a.phash ?? "");
-    const ids = new Set(assets.map((a) => a.id));
-    const createdTimes = meta.assets.map((a) => a.createdTime);
-    const recencyOrder = assets
-      .map((_, i) => i)
-      .sort((a, b) => createdTimes[b].localeCompare(createdTimes[a]));
-
-    loaded = {
-      dim,
-      vectors,
-      assets,
-      human,
-      phashes,
-      ids,
-      createdTimes,
-      recencyOrder,
-    };
+    loaded = buildLoadedIndex(meta, readFileSync(binPath));
     return loaded;
   } catch (err) {
     console.error("failed to load search index", err);
@@ -183,8 +193,80 @@ function loadIndex(): LoadedIndex | null {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Runtime refresh from R2
+// ---------------------------------------------------------------------------
+// The nightly reindex cron uploads a fresh index to R2, but this process only
+// reads the on-disk copy fetched at build time — historically it served a
+// day-old (or worse) index until the next deploy. Poll R2 cheaply (HEAD +
+// ETag compare) and hot-swap the in-memory index when a new one is published.
+
+const INDEX_REFRESH_MS = Number(process.env.INDEX_REFRESH_MS ?? 5 * 60 * 1000);
+let lastRefreshAt = 0;
+let refreshing = false;
+let loadedEtag: string | null = null;
+
+function maybeRefreshIndex(): void {
+  const cfg = indexR2Config();
+  if (!cfg || refreshing) return;
+  const now = Date.now();
+  if (now - lastRefreshAt < INDEX_REFRESH_MS) return;
+  lastRefreshAt = now;
+  refreshing = true;
+  refreshIndexFromR2()
+    .catch((err) => console.error("index refresh from R2 failed", err))
+    .finally(() => {
+      refreshing = false;
+    });
+}
+
+async function refreshIndexFromR2(): Promise<void> {
+  const cfg = indexR2Config();
+  if (!cfg) return;
+  const metaKey = cfg.prefix + path.basename(resolve(ASSET_INDEX_PATH));
+  const vecKey = metaKey.replace(/\.json$/, "") + ".vec.bin";
+
+  const head = await r2HeadObject(cfg, metaKey);
+  if (!head.ok) return; // not published (yet) — keep what we have
+  const etag = head.headers.get("etag");
+  if (etag && etag === loadedEtag) return; // unchanged since last swap
+
+  const meta = JSON.parse(
+    (await r2GetObject(cfg, metaKey)).toString("utf8"),
+  ) as MetaFile;
+  const fresh = buildLoadedIndex(meta, await r2GetObject(cfg, vecKey));
+  if (!fresh) return;
+
+  loaded = fresh;
+  loadedEtag = etag;
+  pruneOverlay(fresh);
+  console.log(
+    `search index refreshed from R2: ${fresh.assets.length} assets, built ${fresh.builtAt}`,
+  );
+}
+
+// After a swap, drop overlay entries the new index has folded in and
+// tombstones for rows the new index no longer contains. Entries newer than
+// the index build (minus a safety margin for the build's own fetch window)
+// are kept — they may not have been visible to the reindex.
+function pruneOverlay(index: LoadedIndex): void {
+  const builtMs = Date.parse(index.builtAt);
+  if (!Number.isFinite(builtMs)) return;
+  const cutoff = builtMs - 60 * 60 * 1000;
+  for (const [id, entry] of runtime) {
+    const createdMs = Date.parse(entry.createdTime);
+    if (index.ids.has(id) && Number.isFinite(createdMs) && createdMs < cutoff) {
+      runtime.delete(id);
+    }
+  }
+  for (const id of removed) {
+    if (!index.ids.has(id)) removed.delete(id);
+  }
+}
+
 /** True if a usable prebuilt index — or any runtime-indexed upload — is present. */
 export function hasIndex(): boolean {
+  maybeRefreshIndex();
   return loadIndex() !== null || runtime.size > 0;
 }
 
@@ -339,6 +421,7 @@ export async function semanticSearch(
   offset = 0,
   pageSize = 24,
 ): Promise<SearchResponse> {
+  maybeRefreshIndex();
   const index = loadIndex();
   if (!index && runtime.size === 0) throw new Error("Search index not loaded");
 
@@ -408,7 +491,10 @@ export async function semanticSearch(
     }
 
     scored.sort((a, b) => b.score - a.score);
-    ordered = scored.slice(0, MAX_HITS).map((x) => x.asset);
+    ordered = scored
+      .filter((x) => x.score >= MIN_SCORE)
+      .slice(0, MAX_HITS)
+      .map((x) => x.asset);
   }
 
   const page = ordered.slice(offset, offset + pageSize);

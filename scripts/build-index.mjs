@@ -50,8 +50,9 @@ const EMBEDDING_TEXT_PROPS = [
   ["Notes", "Reorg Notes"],
 ];
 
-const NOTION_QUERY_CAP = 10000;
-let globalFetchCount = 0;
+// Runaway guard for the manifest walk — far above any real library size, only
+// here so a pathological cursor loop can't spin forever.
+const MAX_TOTAL_ROWS = 200000;
 
 // --- tiny .env loader -------------------------------------------------------
 function loadEnv(path) {
@@ -85,6 +86,10 @@ const notionMaxRetries = Number(env.NOTION_MAX_RETRIES || "6");
 const embeddingMaxRetries = Number(env.EMBEDDING_MAX_RETRIES || "8");
 const embeddingBatchSize = Number(env.EMBEDDING_BATCH_SIZE || "64");
 const embeddingThrottleMs = Number(env.EMBEDDING_THROTTLE_MS || "250");
+// text-embedding-3-* rejects inputs over 8192 tokens, and a request caps out
+// around 300k tokens total. 12k chars (~3k tokens) keeps a 64-item batch far
+// inside both limits, so one verbose row can't 400 the whole build.
+const embeddingMaxInputChars = Number(env.EMBEDDING_MAX_INPUT_CHARS || "12000");
 const assetsDatabaseId =
   env.NOTION_ASSETS_DATABASE_ID || "357fdc24-425f-81ed-805c-c4f9aff0665f";
 let assetsDataSourceId = env.NOTION_ASSETS_DATA_SOURCE_ID || "";
@@ -228,82 +233,30 @@ async function queryDataSource(dataSourceId, body) {
   );
 }
 
+// Walk the ENTIRE data source with plain cursor pagination — no created-time
+// windows. The previous windowed fetch derived its date range from
+// created_time "edge" queries; when those probes misreported the oldest row
+// the whole build silently collapsed to a single month of rows (July 12: the
+// index went from ~8.6k assets to 172) and the upload replaced the full index
+// with that sliver. A full walk has nothing to derive and nothing to miss.
 async function fetchAllRows(dataSourceId) {
-  const oldest = await edgeCreatedTime(dataSourceId, "ascending");
-  const newest = await edgeCreatedTime(dataSourceId, "descending");
-  if (!oldest || !newest) return [];
-
-  globalFetchCount = 0;
-  const rows = [];
-  for (const [start, end] of monthRanges(oldest, newest)) {
-    rows.push(...(await fetchRowsInCreatedRange(dataSourceId, start, end)));
-  }
-  process.stdout.write("\n");
-  return rows;
-}
-
-async function edgeCreatedTime(dataSourceId, direction) {
-  const res = await queryDataSource(dataSourceId, {
-    page_size: 1,
-    sorts: [{ timestamp: "created_time", direction }],
-  });
-  return res.results[0]?.created_time;
-}
-
-function monthRanges(oldest, newest) {
-  const start = new Date(oldest);
-  const final = new Date(newest);
-  const cursor = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), 1));
-  const ranges = [];
-  while (cursor <= final) {
-    const next = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth() + 1, 1));
-    ranges.push([cursor.toISOString(), next.toISOString()]);
-    cursor.setUTCMonth(cursor.getUTCMonth() + 1);
-  }
-  return ranges;
-}
-
-function createdTimeRangeFilter(start, end) {
-  return {
-    and: [
-      { timestamp: "created_time", created_time: { on_or_after: start } },
-      { timestamp: "created_time", created_time: { before: end } },
-    ],
-  };
-}
-
-async function fetchRowsInCreatedRange(dataSourceId, start, end, depth = 0) {
   const rows = [];
   let cursor;
   do {
     const res = await queryDataSource(dataSourceId, {
       page_size: 100,
-      filter: createdTimeRangeFilter(start, end),
       ...(cursor ? { start_cursor: cursor } : {}),
     });
     rows.push(...res.results);
     cursor = res.has_more ? res.next_cursor : undefined;
-    process.stdout.write(
-      `\r  fetched ${rows.length} rows in ${start.slice(0, 10)}..${end.slice(0, 10)}; total ${globalFetchCount + rows.length}…`,
-    );
-    if (rows.length >= NOTION_QUERY_CAP && cursor) {
-      const startMs = Date.parse(start);
-      const endMs = Date.parse(end);
-      if (depth >= 12 || endMs - startMs <= 60 * 60 * 1000) {
-        throw new Error(
-          `Notion query cap reached for ${start}..${end}; narrow the shard further`,
-        );
-      }
-      const mid = new Date(startMs + (endMs - startMs) / 2).toISOString();
-      console.warn(
-        `\n⚠ Notion returned ${NOTION_QUERY_CAP} rows for ${start.slice(0, 10)}..${end.slice(0, 10)}; splitting shard.`,
+    process.stdout.write(`\r  fetched ${rows.length} rows…`);
+    if (rows.length >= MAX_TOTAL_ROWS && cursor) {
+      throw new Error(
+        `manifest walk exceeded ${MAX_TOTAL_ROWS} rows — aborting in case the cursor is looping`,
       );
-      const left = await fetchRowsInCreatedRange(dataSourceId, start, mid, depth + 1);
-      const right = await fetchRowsInCreatedRange(dataSourceId, mid, end, depth + 1);
-      return [...left, ...right];
     }
   } while (cursor);
-  globalFetchCount += rows.length;
+  process.stdout.write("\n");
   return rows;
 }
 
@@ -457,6 +410,34 @@ async function embedBatch(inputs) {
     .map((d) => d.embedding);
 }
 
+// Embed a batch of records. A non-retriable batch failure (e.g. a 400 on one
+// malformed input) falls back to embedding records one at a time; a record
+// that still fails gets a zero vector — it stays in the index and remains
+// findable by keyword, just without semantic similarity, and the build
+// completes instead of exiting 1.
+async function embedRecords(records) {
+  const inputs = records.map((r) => r.text.slice(0, embeddingMaxInputChars));
+  try {
+    return await embedBatch(inputs);
+  } catch (err) {
+    console.warn(
+      `\n⚠ batch embed failed (${err?.status || err?.message}); retrying items individually…`,
+    );
+  }
+  const vectors = [];
+  for (let i = 0; i < inputs.length; i += 1) {
+    try {
+      vectors.push((await embedBatch([inputs[i]]))[0]);
+    } catch (err) {
+      console.warn(
+        `\n⚠ skipping embedding for "${records[i].title}" (${records[i].id}): ${err?.status || err?.message}`,
+      );
+      vectors.push(new Array(dimensions).fill(0));
+    }
+  }
+  return vectors;
+}
+
 async function main() {
   console.log("→ Resolving assets data source…");
   const dataSourceId = await resolveDataSource();
@@ -482,12 +463,11 @@ async function main() {
 
   for (let i = 0; i < records.length; i += BATCH) {
     const slice = records.slice(i, i + BATCH);
-    const vectors = await embedBatch(slice.map((r) => r.text));
+    const vectors = await embedRecords(slice);
+    let needsDrain = false;
     slice.forEach((r, j) => {
       const vec = Float32Array.from(vectors[j]);
-      if (!vecStream.write(Buffer.from(vec.buffer))) {
-        // Backpressure handled lazily; for our sizes this is fine.
-      }
+      if (!vecStream.write(Buffer.from(vec.buffer))) needsDrain = true;
       const { text, ...rest } = r; // metadata only — no vector in the JSON
       // Drop empty human-channel fields so the meta file doesn't bloat for
       // the (initially vast) majority of rows without them.
@@ -497,6 +477,9 @@ async function main() {
       }
       meta.push(rest);
     });
+    if (needsDrain) {
+      await new Promise((resolve) => vecStream.once("drain", resolve));
+    }
     done += slice.length;
     process.stdout.write(`\r  embedded ${done}/${records.length}…`);
     if (embeddingThrottleMs > 0 && done < records.length) {
