@@ -13,6 +13,7 @@ import type { AssetManifest } from "./gemini";
 import { detectMediaType, type MediaType } from "./media";
 import {
   assetsDataSourceId,
+  isNotionPageId,
   manifestSchema,
   notionClient,
   notionRetry,
@@ -384,6 +385,7 @@ export function pageToManifestEntry(page: any): ManifestEntry {
  * databases the integration can see, e.g. collections).
  */
 export async function getAssetPage(id: string): Promise<any | null> {
+  if (!isNotionPageId(id)) return null; // e.g. GET /api/assets/search
   let page: any;
   try {
     page = await notionRetry("getAssetPage", () =>

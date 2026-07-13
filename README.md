@@ -300,14 +300,17 @@ Open <http://localhost:3000>.
 
 > **Refreshing the index in production:** re-indexing is decoupled from app
 > deploys. A **Render Cron Job** runs `npm run reindex` on a schedule
-> (`build:index` → upload to Cloudflare R2 → ping the web service's deploy
-> hook). App deploys themselves only run `fetch:index` to download the
-> prebuilt index from R2 — they never re-embed, so a deploy can't be broken by
-> an embeddings rate limit. To refresh on demand, trigger the cron job (or run
-> `npm run reindex` locally with the R2 env vars set). The Notion data source
-> query endpoint caps a single query at 10,000 results, so `build:index` shards
-> Manifest reads by `created_time` month and recursively splits any shard that
-> still hits the cap.
+> (`build:index` walks the full Manifest → embeds → uploads to Cloudflare R2).
+> App deploys only run `fetch:index` to download the prebuilt index from R2 —
+> they never re-embed, so a deploy can't be broken by an embeddings rate
+> limit — and the running web service also polls R2 (`INDEX_REFRESH_MS`,
+> default 5 min) and hot-swaps the index in memory when a new one is
+> published, so a re-index goes live without a redeploy. To refresh on
+> demand, trigger the cron job (or run `npm run reindex` locally with the R2
+> env vars set). `upload:index` refuses to replace the published index with
+> one under half its size (`INDEX_MIN_COUNT_RATIO`, override with
+> `ALLOW_INDEX_SHRINK=1`), so an incomplete build fails the cron run instead
+> of silently gutting search.
 
 ## Configuration reference
 
@@ -334,12 +337,16 @@ All configurable via environment variables (see `.env.local.example`):
 | `EMBEDDING_BATCH_SIZE`            | Build-time embedding batch size (default `64`)   |
 | `EMBEDDING_THROTTLE_MS`           | Delay between embedding batches to avoid TPM limits (default `250`) |
 | `EMBEDDING_MAX_RETRIES`           | Retries for transient embedding failures such as 429/5xx (default `8`) |
+| `EMBEDDING_MAX_INPUT_CHARS`       | Build-time cap on each asset's embedding text (default `12000`, keeps a batch under the API token limits) |
+| `SEARCH_MIN_SCORE`                | Minimum relevance score for a search hit (default `0.1`; nonsense queries return few/no results) |
+| `INDEX_REFRESH_MS`                | How often the web service polls R2 for a newer index (default `300000` = 5 min) |
+| `INDEX_MIN_COUNT_RATIO`           | `upload:index` aborts if the new index shrinks below this fraction of the published one (default `0.5`; override once with `ALLOW_INDEX_SHRINK=1`) |
 | `NOTION_MAX_RETRIES`              | Retries for transient Notion API failures such as 429/502/503/504 (default `6`) |
 | `ASSET_INDEX_PATH`                | Metadata index path (default `src/data/asset-index.json`; vectors sit beside it as `.vec.bin`) |
 | `R2_ACCOUNT_ID` / `R2_BUCKET`     | Cloudflare R2 account + bucket holding the prebuilt index |
 | `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` | R2 S3 API token (read-only for the web service, read/write for the cron job) |
 | `R2_ENDPOINT` / `R2_REGION` / `R2_INDEX_PREFIX` | Optional R2 overrides (default endpoint from account id, region `auto`, no key prefix) |
-| `RENDER_DEPLOY_HOOK_URL`          | Cron job only — web service deploy hook, pinged after a re-index |
+| `RENDER_DEPLOY_HOOK_URL`          | Cron job only — optional web service deploy hook, pinged after a re-index (the app also hot-reloads the index from R2 without it) |
 | `NOTION_PROP_*`                   | Override property names if the schema changes    |
 
 ## Deploying (Render)

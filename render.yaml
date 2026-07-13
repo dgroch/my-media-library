@@ -92,7 +92,10 @@ services:
         sync: false
       - key: R2_BUCKET
         sync: false
-      # Web service deploy hook — pinged after upload so the new index goes live.
+      # Optional web service deploy hook, pinged after upload. The web service
+      # now also hot-reloads the index from R2 at runtime (INDEX_REFRESH_MS,
+      # default 5 min), so the hook is a belt-and-suspenders extra rather than
+      # the only way a re-index goes live.
       - key: RENDER_DEPLOY_HOOK_URL
         sync: false
 

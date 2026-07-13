@@ -54,6 +54,29 @@ export function assetsR2Config(): R2Config | null {
 }
 
 /**
+ * R2 config for the search index bucket — the same `R2_*` credentials the
+ * build-time `fetch:index` step and the reindex cron use (scripts/lib-r2.mjs).
+ * Used at runtime to hot-reload the index after the nightly reindex, so the
+ * web service doesn't serve a stale index until its next deploy.
+ */
+export function indexR2Config(): (R2Config & { prefix: string }) | null {
+  const accountId = process.env.R2_ACCOUNT_ID;
+  const accessKeyId = process.env.R2_ACCESS_KEY_ID;
+  const secretAccessKey = process.env.R2_SECRET_ACCESS_KEY;
+  const bucket = process.env.R2_BUCKET;
+  if (!accountId || !accessKeyId || !secretAccessKey || !bucket) return null;
+  return {
+    accessKeyId,
+    secretAccessKey,
+    bucket,
+    region: process.env.R2_REGION || "auto",
+    endpoint:
+      process.env.R2_ENDPOINT || `https://${accountId}.r2.cloudflarestorage.com`,
+    prefix: process.env.R2_INDEX_PREFIX || "",
+  };
+}
+
+/**
  * R2 config for the durable video queue (job records + source clips). Defaults
  * to the same credentials/bucket as asset uploads, but can point at a separate
  * (ideally private) bucket via `VIDEO_QUEUE_*`. Used by the web service (to

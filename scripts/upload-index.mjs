@@ -24,6 +24,44 @@ if (!cfg) {
   process.exit(1);
 }
 
+// Refuse to replace the published index with a drastically smaller one. On
+// July 12 a buggy fetch produced a 172-asset build (from ~8.6k) and the upload
+// happily replaced the full index with it. Any future regression of that shape
+// should fail the cron run loudly instead of silently gutting search.
+// Override for an intentional shrink with ALLOW_INDEX_SHRINK=1.
+const MIN_COUNT_RATIO = Number(env.INDEX_MIN_COUNT_RATIO || "0.5");
+
+async function guardAgainstShrink(newCount) {
+  if (env.ALLOW_INDEX_SHRINK === "1") {
+    console.log("ℹ ALLOW_INDEX_SHRINK=1 — skipping shrink guard.");
+    return;
+  }
+  const key = indexKey(cfg, basename(OUT_PATH));
+  let published;
+  try {
+    const res = await r2Request(cfg, "GET", key);
+    if (res.status === 404) return; // first upload — nothing to compare
+    if (!res.ok) {
+      console.warn(`⚠ Could not read published index (${res.status}); skipping shrink guard.`);
+      return;
+    }
+    published = JSON.parse(Buffer.from(await res.arrayBuffer()).toString("utf8"));
+  } catch (err) {
+    console.warn(`⚠ Shrink guard check failed (${err.message}); continuing.`);
+    return;
+  }
+  const oldCount = Number(published?.count) || 0;
+  if (oldCount > 0 && newCount < oldCount * MIN_COUNT_RATIO) {
+    throw new Error(
+      `new index has ${newCount} assets but the published index has ${oldCount} ` +
+        `(below the ${MIN_COUNT_RATIO} ratio floor). Refusing to replace it — ` +
+        `this usually means the manifest fetch was incomplete. ` +
+        `Set ALLOW_INDEX_SHRINK=1 to override an intentional shrink.`,
+    );
+  }
+  console.log(`  shrink guard ok: ${newCount} new vs ${oldCount} published assets`);
+}
+
 async function put(localPath, contentType) {
   if (!existsSync(localPath)) {
     throw new Error(`${localPath} not found — run \`npm run build:index\` first`);
@@ -38,6 +76,12 @@ async function put(localPath, contentType) {
 }
 
 async function main() {
+  if (!existsSync(OUT_PATH)) {
+    throw new Error(`${OUT_PATH} not found — run \`npm run build:index\` first`);
+  }
+  const built = JSON.parse(readFileSync(OUT_PATH, "utf8"));
+  await guardAgainstShrink(Number(built?.count) || 0);
+
   console.log(`→ Uploading index to R2 bucket "${cfg.bucket}"…`);
   await put(OUT_PATH, "application/json");
   await put(VEC_PATH, "application/octet-stream");
