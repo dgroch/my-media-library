@@ -50,9 +50,17 @@ const EMBEDDING_TEXT_PROPS = [
   ["Notes", "Reorg Notes"],
 ];
 
-// Runaway guard for the manifest walk — far above any real library size, only
-// here so a pathological cursor loop can't spin forever.
-const MAX_TOTAL_ROWS = 200000;
+// Notion silently ends pagination at 10,000 results per query (has_more goes
+// false at exactly 10k — observed on the 2026-07-13 reindex, which stopped at
+// 10,000 rows of a larger manifest). When a walk hits this cap we re-fetch in
+// created_time shards instead; see fetchAllRows.
+const NOTION_QUERY_CAP = 10000;
+// Bisection depth guard: only reachable if >10k rows share (nearly) the same
+// created_time, which no real import has produced.
+const MAX_SHARD_DEPTH = 24;
+// created_time can't predate the Notion workspace; a fixed floor avoids
+// deriving range edges from sort probes (the bug behind the July 12 collapse).
+const RANGE_FLOOR = "2000-01-01T00:00:00.000Z";
 
 // --- tiny .env loader -------------------------------------------------------
 function loadEnv(path) {
@@ -233,31 +241,100 @@ async function queryDataSource(dataSourceId, body) {
   );
 }
 
-// Walk the ENTIRE data source with plain cursor pagination — no created-time
-// windows. The previous windowed fetch derived its date range from
-// created_time "edge" queries; when those probes misreported the oldest row
-// the whole build silently collapsed to a single month of rows (July 12: the
-// index went from ~8.6k assets to 172) and the upload replaced the full index
-// with that sliver. A full walk has nothing to derive and nothing to miss.
-async function fetchAllRows(dataSourceId) {
+// Page through one query until has_more is false or the 10k cap is reached.
+// `capped: true` means the result may be incomplete and the range must be
+// split (Notion reports has_more=false at the cap, so hitting exactly 10k is
+// itself the signal — worst case a genuinely-10k range gets sharded once for
+// nothing).
+async function walkQuery(dataSourceId, filter, label) {
   const rows = [];
   let cursor;
   do {
     const res = await queryDataSource(dataSourceId, {
       page_size: 100,
+      ...(filter ? { filter } : {}),
       ...(cursor ? { start_cursor: cursor } : {}),
     });
     rows.push(...res.results);
     cursor = res.has_more ? res.next_cursor : undefined;
-    process.stdout.write(`\r  fetched ${rows.length} rows…`);
-    if (rows.length >= MAX_TOTAL_ROWS && cursor) {
-      throw new Error(
-        `manifest walk exceeded ${MAX_TOTAL_ROWS} rows — aborting in case the cursor is looping`,
-      );
-    }
+    process.stdout.write(`\r  fetched ${rows.length} rows${label}…`);
+    if (rows.length >= NOTION_QUERY_CAP) return { rows, capped: true };
   } while (cursor);
+  return { rows, capped: false };
+}
+
+function createdTimeRangeFilter(start, end) {
+  return {
+    and: [
+      { timestamp: "created_time", created_time: { on_or_after: start } },
+      { timestamp: "created_time", created_time: { before: end } },
+    ],
+  };
+}
+
+// Pick a split point for [start, end): the median created_time of the rows the
+// capped attempt did return. That splits the actual data mass (a time-midpoint
+// can waste whole fetches on empty halves when imports cluster) and never
+// relies on Notion sort behaviour — sort-derived edges are what silently
+// collapsed the index to one month on July 12. Falls back to the midpoint, and
+// returns null when the range can't be narrowed further.
+function splitPoint(sampleRows, start, end) {
+  const startMs = Date.parse(start);
+  const endMs = Date.parse(end);
+  const times = sampleRows
+    .map((r) => Date.parse(r.created_time))
+    .filter(Number.isFinite)
+    .sort((a, b) => a - b);
+  let mid = times[Math.floor(times.length / 2)];
+  if (!(mid > startMs && mid < endMs)) mid = startMs + (endMs - startMs) / 2;
+  mid = Math.round(mid);
+  if (!(mid > startMs && mid < endMs)) return null;
+  return new Date(mid).toISOString();
+}
+
+async function fetchCreatedRange(dataSourceId, start, end, sampleRows, depth) {
+  if (depth > MAX_SHARD_DEPTH) {
+    throw new Error(`created_time sharding exceeded depth ${MAX_SHARD_DEPTH}`);
+  }
+  const mid = splitPoint(sampleRows, start, end);
+  if (!mid) {
+    throw new Error(
+      `cannot narrow ${start}..${end} below the ${NOTION_QUERY_CAP}-row query cap`,
+    );
+  }
+  const out = [];
+  // Half-open halves [start, mid) and [mid, end) — no overlap, no gap.
+  for (const [s, e] of [[start, mid], [mid, end]]) {
+    const { rows, capped } = await walkQuery(
+      dataSourceId,
+      createdTimeRangeFilter(s, e),
+      ` in ${s.slice(0, 19)}..${e.slice(0, 19)}`,
+    );
+    out.push(
+      ...(capped
+        ? await fetchCreatedRange(dataSourceId, s, e, rows, depth + 1)
+        : rows),
+    );
+  }
+  return out;
+}
+
+// Fetch the ENTIRE manifest. Try a single unfiltered walk first — complete
+// whenever the library is under Notion's 10k-per-query cap. Past the cap,
+// re-fetch in created_time shards, bisecting any shard that itself caps out.
+async function fetchAllRows(dataSourceId) {
+  const { rows, capped } = await walkQuery(dataSourceId, undefined, "");
+  if (!capped) {
+    process.stdout.write("\n");
+    return rows;
+  }
+  console.warn(
+    `\n⚠ Notion ended the walk at its ${NOTION_QUERY_CAP}-result query cap; re-fetching in created_time shards…`,
+  );
+  const ceiling = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+  const all = await fetchCreatedRange(dataSourceId, RANGE_FLOOR, ceiling, rows, 0);
   process.stdout.write("\n");
-  return rows;
+  return all;
 }
 
 // The "People" property stores a JSON array like

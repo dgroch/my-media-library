@@ -301,6 +301,10 @@ Open <http://localhost:3000>.
 > **Refreshing the index in production:** re-indexing is decoupled from app
 > deploys. A **Render Cron Job** runs `npm run reindex` on a schedule
 > (`build:index` walks the full Manifest → embeds → uploads to Cloudflare R2).
+> Notion silently ends any single query's pagination at 10,000 results, so
+> when a walk hits that cap `build:index` re-fetches in `created_time` shards,
+> bisecting any shard that itself caps out — the index covers the whole
+> library no matter how large it grows.
 > App deploys only run `fetch:index` to download the prebuilt index from R2 —
 > they never re-embed, so a deploy can't be broken by an embeddings rate
 > limit — and the running web service also polls R2 (`INDEX_REFRESH_MS`,
