@@ -3,6 +3,7 @@
 import { useState } from "react";
 
 import {
+  driveMirror,
   formatDimensions,
   originalSource,
   previewIsDownscaled,
@@ -29,6 +30,8 @@ export interface ReviewEntry {
   driveLink?: string;
   /** Pixel size of the original, "WxH". */
   dimensions?: string;
+  /** Set on app uploads only — means `url` is the untouched original. */
+  uploaded_at?: string;
   context: string;
   people: PersonTag[];
   product: string;
@@ -164,15 +167,15 @@ export default function AssetEditCard({
   }
 
   const isVideo = entry.mediaType === "video";
-  const original = originalSource({
+  const asset = {
     url: entry.url,
     driveLink: entry.driveLink ?? "",
     dimensions: entry.dimensions,
-  });
-  const downscaled = previewIsDownscaled({
-    url: entry.url,
-    driveLink: entry.driveLink ?? "",
-  });
+    cdnIsOriginal: Boolean(entry.uploaded_at),
+  };
+  const original = originalSource(asset);
+  const downscaled = previewIsDownscaled(asset);
+  const mirror = driveMirror(asset);
   const size = formatDimensions(entry.dimensions);
 
   return (
@@ -209,6 +212,14 @@ export default function AssetEditCard({
             {downscaled && (
               <span className="muted"> · the image above is a preview</span>
             )}
+            {mirror && (
+              <>
+                {" · "}
+                <a href={mirror} target="_blank" rel="noreferrer">
+                  also in Drive
+                </a>
+              </>
+            )}
           </p>
         )}
 
@@ -235,6 +246,14 @@ export default function AssetEditCard({
             {(clean === "nochange" || clean === "error") && cleanMsg && (
               <span className="save-err">{cleanMsg}</span>
             )}
+            {/* The image model returns roughly 1MP regardless of input, and the
+                cleaned result overwrites the stored file in place. Say so
+                before someone spends a 24MP original on caption removal. */}
+            <p className="edit-card-warn">
+              ⚠ Overwrites the stored original with the model&rsquo;s output,
+              which comes back at about 1 megapixel
+              {size ? ` (this one is ${size})` : ""}. There is no undo.
+            </p>
           </div>
         )}
       </div>

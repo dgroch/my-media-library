@@ -28,6 +28,14 @@ export interface Asset {
    * "" when unknown. Note this describes the original, not the preview.
    */
   dimensions: string;
+  /**
+   * True when `url` is itself the untouched original — i.e. the row was
+   * uploaded through this app, which never downscales. False for
+   * Drive-synced rows, where `url` is a downscaled preview of the Drive
+   * master. Uploads are also mirrored to Drive, so `driveLink` alone can no
+   * longer tell the two apart.
+   */
+  cdnIsOriginal: boolean;
 }
 
 export interface SearchResponse {

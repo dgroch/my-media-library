@@ -402,6 +402,10 @@ function toRecord(page) {
   // Pixel size of the *original* (Drive master or uploaded file), not of the
   // Preview URL — the UI shows it next to the "open the original" link.
   const pixelDimensions = plainText(p["Dimensions"]);
+  // Only app uploads carry "Uploaded At", and only app uploads store the
+  // untouched original at Preview URL (uploads are mirrored to Drive too, so
+  // a Drive Link no longer implies the preview is downscaled).
+  const cdnIsOriginal = Boolean(p["Uploaded At"]?.date?.start);
   const mediaType = detectMediaType(
     title,
     plainText(p["Mime Type"]),
@@ -439,6 +443,7 @@ function toRecord(page) {
     driveLink,
     driveFileId,
     dimensions: pixelDimensions,
+    cdnIsOriginal,
     mediaType,
     context,
     people,
@@ -581,6 +586,8 @@ async function main() {
         const v = rest[key];
         if (v === "" || (Array.isArray(v) && v.length === 0)) delete rest[key];
       }
+      // Only ~1% of rows are app uploads; omit the flag on the rest.
+      if (!rest.cdnIsOriginal) delete rest.cdnIsOriginal;
       meta.push(rest);
     });
     if (needsDrain) {

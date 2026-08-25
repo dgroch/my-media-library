@@ -24,6 +24,7 @@ import {
 } from "./assets";
 import { geminiConfigured, uploadConfig } from "./config";
 import { removeOverlays } from "./cleanup";
+import { mirrorToDrive } from "./drive";
 import { embedQuery } from "./embeddings";
 import { manifestImage, type AssetManifest } from "./gemini";
 import { hammingDistance, perceptualHash } from "./phash";
@@ -168,6 +169,17 @@ export async function ingestImage(params: IngestParams): Promise<IngestResult> {
   const stored = await sharp(image)
     .metadata()
     .catch(() => null);
+
+  // Mirror the original to Drive so app uploads are browsable alongside the
+  // legacy Drive-synced corpus. Best-effort by construction: the CDN object
+  // above is already the original, so a Drive failure costs a backup, not the
+  // asset, and returns null rather than throwing.
+  const drive = await mirrorToDrive({
+    name: slug,
+    mimeType: storedMime,
+    bytes: image,
+  });
+
   let entry = await createAssetEntry({
     filename: slug,
     url,
@@ -177,6 +189,7 @@ export async function ingestImage(params: IngestParams): Promise<IngestResult> {
     metadata: params.metadata,
     width: stored?.width,
     height: stored?.height,
+    drive,
   });
 
   // AI enrichment (best-effort) — never fails the ingest.
@@ -251,6 +264,11 @@ export async function ingestVideoFile(params: {
     throw new Error("Failed to store the video.");
   }
 
+  const drive = await mirrorToDrive({
+    name: slug,
+    mimeType: params.storedMime,
+    bytes: params.bytes,
+  });
   const entry = await createAssetEntry({
     filename: slug,
     url: `${uploadConfig.cdnBaseUrl}/${slug}`,
@@ -258,6 +276,7 @@ export async function ingestVideoFile(params: {
     sha256,
     phash: "",
     metadata: params.metadata,
+    drive,
   });
   const status = await indexEntry(entry);
   return {

@@ -717,6 +717,7 @@ export async function GET(request: Request) {
             "mediaType",
             "driveLink",
             "dimensions",
+            "cdnIsOriginal",
           ],
           properties: {
             id: { type: "string", description: "Notion page id of the asset." },
@@ -740,6 +741,11 @@ export async function GET(request: Request) {
               type: "string",
               description:
                 'Pixel size of the ORIGINAL as "WxH" (e.g. "1080x1920"), or empty when unknown. Describes the original, not the preview at `url`.',
+            },
+            cdnIsOriginal: {
+              type: "boolean",
+              description:
+                "True when `url` is itself the untouched original (an app upload). False for Drive-synced rows, where `url` is a downscaled preview. Uploads are mirrored to Drive, so `driveLink` alone does not distinguish them.",
             },
           },
         },
@@ -852,7 +858,7 @@ export async function GET(request: Request) {
             driveLink: {
               type: "string",
               description:
-                "Google Drive link to the full-resolution original (Drive-synced rows only).",
+                "Google Drive link: the full-resolution original on Drive-synced rows, or the mirror of the CDN original on uploaded rows.",
             },
             dimensions: {
               type: "string",

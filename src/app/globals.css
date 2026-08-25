@@ -8,6 +8,7 @@
   --accent: #6d8bff;
   --accent-contrast: #ffffff;
   --danger: #e5484d;
+  --warn: #e0a04a;
   --radius: 12px;
   --maxw: 1400px;
 }
@@ -903,6 +904,26 @@ select.search-input {
 
 .edit-card-original .muted {
   color: var(--text-muted);
+}
+
+/* Inline hint under a form control. */
+.hint {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.hint.warn {
+  color: var(--warn);
+}
+
+/* Destructive-action warning (caption removal overwrites the original). */
+.edit-card-warn {
+  margin: 6px 0 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--warn);
 }
 
 .edit-card-ai {

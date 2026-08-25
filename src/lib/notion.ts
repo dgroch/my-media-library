@@ -6,6 +6,7 @@ import {
   COLLECTION_ASSETS_PROP,
   COLLECTION_NAME_PROP,
   humanKeywordProps,
+  humanProps,
   notionConfig,
   props,
   keywordTextProps,
@@ -214,6 +215,9 @@ function pageToAsset(page: any): Asset {
     description: plainText(p[props.description]),
     driveLink: plainText(p[props.driveLink]),
     dimensions: plainText(p[props.dimensions]),
+    // Only app uploads carry `Uploaded At`, and only app uploads store the
+    // untouched original at `url` — see Asset.cdnIsOriginal.
+    cdnIsOriginal: Boolean(p[humanProps.uploadedAt]?.date?.start),
     mediaType: detectMediaType(
       title,
       plainText(p[props.mimeType]),

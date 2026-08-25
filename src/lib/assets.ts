@@ -466,6 +466,8 @@ export interface CreateAssetInput {
   /** Pixel size of the stored original, when the decoder reported it. */
   width?: number;
   height?: number;
+  /** The Drive mirror of this original, when mirroring is on and succeeded. */
+  drive?: { id: string; webViewLink: string } | null;
 }
 
 export async function createAssetEntry(
@@ -482,6 +484,10 @@ export async function createAssetEntry(
     // original" link. Skipped when the decoder didn't report a size.
     [props.dimensions]:
       input.width && input.height ? `${input.width}x${input.height}` : undefined,
+    // The Drive mirror, when there is one. Same two properties the legacy
+    // Drive crawler writes, so uploaded rows are shaped like crawled ones.
+    [props.driveLink]: input.drive?.webViewLink,
+    [props.driveFileId]: input.drive?.id,
     [humanProps.uploadedAt]: new Date().toISOString(),
     // `internal` is the default rights kind (spec) — last so the spread's
     // possibly-undefined value can't clobber it.

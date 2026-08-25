@@ -10,10 +10,13 @@
 //
 //   • Uploaded rows (POST /api/assets): the exact bytes the uploader chose are
 //     stored untouched under a content-addressed CDN key, so `url` *is* the
-//     original. These have no Drive Link at all.
+//     original. These are ALSO mirrored to Drive, so the presence of a Drive
+//     Link no longer distinguishes the two populations — `cdnIsOriginal` does.
 //
-// So: prefer Drive when the row has it, else the CDN object. Client-safe (no
-// `server-only`) because both the grid and the edit card need it.
+// So: for uploads take the CDN object (it is the original, it is public, and
+// it needs no Google sign-in); otherwise prefer Drive, else the CDN object.
+// Client-safe (no `server-only`) because both the grid and the edit card
+// need it.
 
 import type { Asset } from "./types";
 
@@ -26,10 +29,18 @@ export interface OriginalSource {
   where: string;
 }
 
-type AssetLike = Pick<Asset, "url" | "driveLink"> & { dimensions?: string };
+type AssetLike = Pick<Asset, "url" | "driveLink"> & {
+  dimensions?: string;
+  cdnIsOriginal?: boolean;
+};
 
 /** The best available full-resolution source, or null when there is none. */
 export function originalSource(asset: AssetLike): OriginalSource | null {
+  // An uploaded row's CDN object IS the original — prefer it over the Drive
+  // mirror, which is byte-identical but needs a Google sign-in to open.
+  if (asset.cdnIsOriginal && asset.url) {
+    return { href: asset.url, kind: "cdn", where: "the brand CDN" };
+  }
   if (asset.driveLink) {
     return { href: asset.driveLink, kind: "drive", where: "Google Drive" };
   }
@@ -37,6 +48,11 @@ export function originalSource(asset: AssetLike): OriginalSource | null {
     return { href: asset.url, kind: "cdn", where: "the brand CDN" };
   }
   return null;
+}
+
+/** The Drive mirror of an uploaded original, when there is one. */
+export function driveMirror(asset: AssetLike): string | null {
+  return asset.cdnIsOriginal && asset.driveLink ? asset.driveLink : null;
 }
 
 /** "1080×1920" for display, or "" when the manifest doesn't record it. */
@@ -48,10 +64,11 @@ export function formatDimensions(dimensions?: string): string {
 /**
  * True when what the grid renders is known to be smaller than the original —
  * i.e. a Drive master whose CDN preview we're showing instead. Used to label
- * the click-through so nobody assumes the preview is all there is.
+ * the click-through so nobody assumes the preview is all there is. Uploaded
+ * rows are excluded: their CDN object is the original, Drive mirror or not.
  */
 export function previewIsDownscaled(asset: AssetLike): boolean {
-  return Boolean(asset.driveLink && asset.url);
+  return Boolean(asset.driveLink && asset.url && !asset.cdnIsOriginal);
 }
 
 /** Tooltip for the "open the original" affordance. */

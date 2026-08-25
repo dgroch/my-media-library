@@ -52,8 +52,18 @@ Agents  ──▶ /openapi.json ──▶ discover + call the JSON API above
   on `/a/{id}` all land on the full-resolution file. Drive-synced tiles carry a
   visible **"⤢ Original on Drive · WxH"** badge, because the hover-only ↗ was
   too easy to miss — which is how people ended up using previews as if they
-  were originals. Uploads have no Drive copy at all: nothing in this app writes
-  to Google Drive.
+  were originals.
+- **Drive mirror.** Uploaded originals are also pushed to a Google Drive folder
+  (`src/lib/drive.ts`, service-account auth, `GOOGLE_DRIVE_*` env), so app
+  uploads are browsable next to the legacy corpus. This is a **backup, not a
+  resolution fix** — the CDN object is already the untouched original and stays
+  canonical, which is why `originalSource` sends uploaded rows to the CDN (it
+  is public and needs no Google sign-in) and offers Drive as an "also in Drive"
+  link. Mirroring is optional and best-effort: with the env unset, or on any
+  Drive error, the upload succeeds unchanged and the row simply has no Drive
+  Link. Because uploads now have a Drive Link too, `driveLink` alone no longer
+  identifies a downscaled preview — `Asset.cdnIsOriginal` (set from `Uploaded
+  At`) does.
 - **Recorded resolution.** Uploads write the stored image's pixel size to the
   Manifest's `Dimensions` property, and it is carried through the search index
   and the API (`Asset.dimensions`), so the UI can state what resolution a link
@@ -85,10 +95,12 @@ without hand-written schemas.
 | `/c/{id}`                | GET    | —                                  | server-rendered HTML share page      | none |
 | `/openapi.json`          | GET    | —                                  | the OpenAPI 3.1 description          | none |
 
-`Asset` is `{ id, title, url, description, mediaType, driveLink, dimensions }`.
+`Asset` is `{ id, title, url, description, mediaType, driveLink, dimensions,
+cdnIsOriginal }`.
 `driveLink` is the full-resolution original on Drive-synced rows (where `url` is
 a downscaled preview); on uploaded rows it is empty and `url` is itself the
-original. `dimensions` is the original's `"WxH"`, or `""` when unknown. An empty
+original. `dimensions` is the original's `"WxH"`, or `""` when unknown. `cdnIsOriginal`
+is true when `url` is itself the untouched original (an app upload). An empty
 `q` returns the most recent assets. Example:
 
 ```bash
