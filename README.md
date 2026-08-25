@@ -37,6 +37,27 @@ Agents  ──▶ /openapi.json ──▶ discover + call the JSON API above
   Images render from the `Preview URL` CDN. Videos in the Manifest have no
   public preview image, so they render as a "▶ Video" placeholder card showing
   the description and linking to the original (Google Drive).
+- **Originals vs previews.** The Manifest holds two populations with opposite
+  storage stories, and the UI has to route people to the right file or they
+  leave with a thumbnail:
+
+  | | Where the original lives | What `Preview URL` is |
+  | --- | --- | --- |
+  | **Drive-synced rows** (crawled by the offline Drive skill) | Google Drive, at `Drive Link` | a **downscaled** preview generated from it — often ~640–1000px against a 4480×6720 master |
+  | **Uploaded rows** (`POST /api/assets`) | the brand CDN, at `url` | the untouched original itself — the upload path never downscales |
+
+  `src/lib/original.ts` encodes that rule (`originalSource`): prefer `Drive
+  Link` when the row has one, else the CDN object. Every "open" affordance goes
+  through it, so ↗ on a card, the badge under a Drive-synced tile and the link
+  on `/a/{id}` all land on the full-resolution file. Drive-synced tiles carry a
+  visible **"⤢ Original on Drive · WxH"** badge, because the hover-only ↗ was
+  too easy to miss — which is how people ended up using previews as if they
+  were originals. Uploads have no Drive copy at all: nothing in this app writes
+  to Google Drive.
+- **Recorded resolution.** Uploads write the stored image's pixel size to the
+  Manifest's `Dimensions` property, and it is carried through the search index
+  and the API (`Asset.dimensions`), so the UI can state what resolution a link
+  actually leads to. It describes the **original**, not the preview.
 - The Notion and OpenAI keys live only on the server; never exposed to the
   browser.
 - Collections are stored as rows in a dedicated **Asset Collections** Notion
@@ -64,7 +85,10 @@ without hand-written schemas.
 | `/c/{id}`                | GET    | —                                  | server-rendered HTML share page      | none |
 | `/openapi.json`          | GET    | —                                  | the OpenAPI 3.1 description          | none |
 
-`Asset` is `{ id, title, url, description, mediaType, driveLink }`. An empty
+`Asset` is `{ id, title, url, description, mediaType, driveLink, dimensions }`.
+`driveLink` is the full-resolution original on Drive-synced rows (where `url` is
+a downscaled preview); on uploaded rows it is empty and `url` is itself the
+original. `dimensions` is the original's `"WxH"`, or `""` when unknown. An empty
 `q` returns the most recent assets. Example:
 
 ```bash

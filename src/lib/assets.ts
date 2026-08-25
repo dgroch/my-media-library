@@ -54,7 +54,14 @@ export interface ManifestEntry {
   /** AI-classifier description (the enrichment channel). */
   description: string;
   mediaType: MediaType;
+  /**
+   * Google Drive link to the original. Present only on Drive-synced rows,
+   * where `url` is a downscaled preview and this is the full-resolution
+   * master. Uploaded rows store the untouched original at `url` instead.
+   */
   driveLink: string;
+  /** Pixel size of the original as "WxH", or "" when unknown. */
+  dimensions: string;
   // Human channel ------------------------------------------------------------
   context: string;
   people: PersonTag[];
@@ -358,6 +365,7 @@ export function pageToManifestEntry(page: any): ManifestEntry {
     url: plainText(p[props.imageUrl]),
     description: plainText(p[props.description]),
     driveLink: plainText(p[props.driveLink]),
+    dimensions: plainText(p[props.dimensions]),
     mediaType: detectMediaType(
       title,
       plainText(p[props.mimeType]),
@@ -455,6 +463,9 @@ export interface CreateAssetInput {
   sha256: string;
   phash: string;
   metadata: AssetMetadataInput;
+  /** Pixel size of the stored original, when the decoder reported it. */
+  width?: number;
+  height?: number;
 }
 
 export async function createAssetEntry(
@@ -467,6 +478,10 @@ export async function createAssetEntry(
     [props.mimeType]: input.mimeType,
     [humanProps.sha256]: input.sha256,
     [humanProps.phash]: input.phash,
+    // Recorded so the UI can state the resolution behind the "open the
+    // original" link. Skipped when the decoder didn't report a size.
+    [props.dimensions]:
+      input.width && input.height ? `${input.width}x${input.height}` : undefined,
     [humanProps.uploadedAt]: new Date().toISOString(),
     // `internal` is the default rights kind (spec) — last so the spread's
     // possibly-undefined value can't clobber it.

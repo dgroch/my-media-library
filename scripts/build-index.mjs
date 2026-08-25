@@ -399,6 +399,9 @@ function toRecord(page) {
   const url = plainText(p["Preview URL"]);
   const driveLink = plainText(p["Drive Link"]);
   const driveFileId = plainText(p["Drive File ID"]);
+  // Pixel size of the *original* (Drive master or uploaded file), not of the
+  // Preview URL — the UI shows it next to the "open the original" link.
+  const pixelDimensions = plainText(p["Dimensions"]);
   const mediaType = detectMediaType(
     title,
     plainText(p["Mime Type"]),
@@ -435,6 +438,7 @@ function toRecord(page) {
     description,
     driveLink,
     driveFileId,
+    dimensions: pixelDimensions,
     mediaType,
     context,
     people,
@@ -573,7 +577,7 @@ async function main() {
       const { text, ...rest } = r; // metadata only — no vector in the JSON
       // Drop empty human-channel fields so the meta file doesn't bloat for
       // the (initially vast) majority of rows without them.
-      for (const key of ["context", "people", "product", "location", "source", "tags", "phash"]) {
+      for (const key of ["context", "people", "product", "location", "source", "tags", "phash", "dimensions"]) {
         const v = rest[key];
         if (v === "" || (Array.isArray(v) && v.length === 0)) delete rest[key];
       }

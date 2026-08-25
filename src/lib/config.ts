@@ -30,6 +30,10 @@ export const props = {
   assetType: process.env.NOTION_PROP_ASSET_TYPE ?? "Asset Type",
   mimeType: process.env.NOTION_PROP_MIME_TYPE ?? "Mime Type",
   driveLink: process.env.NOTION_PROP_DRIVE_LINK ?? "Drive Link",
+  // Pixel size of the original, "WxH". Written at upload (from the decoded
+  // image) and by the Drive crawler, so the UI can say what resolution the
+  // "open the original" link actually leads to.
+  dimensions: process.env.NOTION_PROP_DIMENSIONS ?? "Dimensions",
 } as const;
 
 // AI-channel properties on the Manifest — the enrichment side of the two-channel

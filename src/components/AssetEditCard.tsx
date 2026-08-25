@@ -2,6 +2,12 @@
 
 import { useState } from "react";
 
+import {
+  formatDimensions,
+  originalSource,
+  previewIsDownscaled,
+} from "@/lib/original";
+
 // One editable manifest row on the review page. Shows the AI enrichment
 // (read-only, for reference) and lets a human author the fields Gemini can't
 // know — a person's name, the product, rights — then PATCHes the change. The
@@ -19,6 +25,10 @@ export interface ReviewEntry {
   url: string;
   description: string;
   mediaType: string;
+  /** Set when the full-resolution master lives in Google Drive. */
+  driveLink?: string;
+  /** Pixel size of the original, "WxH". */
+  dimensions?: string;
   context: string;
   people: PersonTag[];
   product: string;
@@ -154,12 +164,31 @@ export default function AssetEditCard({
   }
 
   const isVideo = entry.mediaType === "video";
+  const original = originalSource({
+    url: entry.url,
+    driveLink: entry.driveLink ?? "",
+    dimensions: entry.dimensions,
+  });
+  const downscaled = previewIsDownscaled({
+    url: entry.url,
+    driveLink: entry.driveLink ?? "",
+  });
+  const size = formatDimensions(entry.dimensions);
 
   return (
     <div className="edit-card">
       <div className="edit-card-media">
         {entry.url ? (
-          <a href={previewUrl} target="_blank" rel="noreferrer">
+          <a
+            href={original ? original.href : previewUrl}
+            target="_blank"
+            rel="noreferrer"
+            title={
+              downscaled
+                ? "Open the full-resolution original on Google Drive"
+                : "Open the full-size original"
+            }
+          >
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src={previewUrl} alt={entry.title} loading="lazy" />
           </a>
@@ -168,6 +197,21 @@ export default function AssetEditCard({
             <div className="placeholder-glyph">{isVideo ? "▶" : "🖼"}</div>
           </div>
         )}
+        {/* Be explicit about where the full-resolution file is and how big it
+            is — on Drive-synced rows the image above is only a preview. */}
+        {original && (
+          <p className="edit-card-original">
+            <a href={original.href} target="_blank" rel="noreferrer">
+              ⤢ Open the original on{" "}
+              {original.kind === "drive" ? "Google Drive" : "the brand CDN"}
+            </a>
+            {size && <span className="muted"> · {size}</span>}
+            {downscaled && (
+              <span className="muted"> · the image above is a preview</span>
+            )}
+          </p>
+        )}
+
         {description ? (
           <p className="edit-card-ai">{description}</p>
         ) : (

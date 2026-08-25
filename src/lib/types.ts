@@ -16,8 +16,18 @@ export interface Asset {
   description: string;
   /** Derived from the filename/MIME — "image" | "video" | "other". */
   mediaType: MediaType;
-  /** Google Drive link to the original file (fallback when there is no CDN url). */
+  /**
+   * Google Drive link to the original file. When set, the master lives in
+   * Drive and `url` is a downscaled CDN preview of it — see `originalSource`
+   * in `lib/original.ts`, which is how the UI decides where "open the
+   * original" points.
+   */
   driveLink: string;
+  /**
+   * Pixel size of the *original* as "WxH" (the Manifest's `Dimensions`), or
+   * "" when unknown. Note this describes the original, not the preview.
+   */
+  dimensions: string;
 }
 
 export interface SearchResponse {

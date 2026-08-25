@@ -162,6 +162,12 @@ export async function ingestImage(params: IngestParams): Promise<IngestResult> {
   }
 
   const url = `${uploadConfig.cdnBaseUrl}/${slug}`;
+  // The object above IS the original — nothing in this path downscales — so
+  // its pixel size is what "open the original" leads to. Recorded on the row
+  // for the UI; a metadata read that fails must not fail the upload.
+  const stored = await sharp(image)
+    .metadata()
+    .catch(() => null);
   let entry = await createAssetEntry({
     filename: slug,
     url,
@@ -169,19 +175,20 @@ export async function ingestImage(params: IngestParams): Promise<IngestResult> {
     sha256,
     phash,
     metadata: params.metadata,
+    width: stored?.width,
+    height: stored?.height,
   });
 
   // AI enrichment (best-effort) — never fails the ingest.
   let manifest: AssetManifest | null = null;
   if ((params.runManifest ?? true) && geminiConfigured()) {
     try {
-      const meta = await sharp(image).metadata();
       manifest = await manifestImage({
         buffer: image,
         mimeType: storedMime,
         filename: slug,
-        width: meta.width,
-        height: meta.height,
+        width: stored?.width,
+        height: stored?.height,
       });
       entry = await writeManifest(entry.id, manifest);
     } catch (err) {

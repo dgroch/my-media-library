@@ -213,6 +213,7 @@ function pageToAsset(page: any): Asset {
     url: plainText(p[props.imageUrl]),
     description: plainText(p[props.description]),
     driveLink: plainText(p[props.driveLink]),
+    dimensions: plainText(p[props.dimensions]),
     mediaType: detectMediaType(
       title,
       plainText(p[props.mimeType]),

@@ -30,6 +30,7 @@ interface MetaRecord {
   description: string;
   mediaType: MediaType;
   driveLink: string;
+  dimensions?: string;
   createdTime: string;
   // Human-context fields (present once build-index has seen uploaded rows).
   context?: string;
@@ -148,6 +149,7 @@ function buildLoadedIndex(meta: MetaFile, buf: Buffer): LoadedIndex | null {
     description: a.description,
     mediaType: a.mediaType,
     driveLink: a.driveLink,
+    dimensions: a.dimensions ?? "",
   }));
   const human: HumanMeta[] = meta.assets.map((a) => ({
     context: a.context ?? "",
@@ -312,6 +314,7 @@ export function upsertRuntimeAsset(
       description: entry.description,
       mediaType: entry.mediaType,
       driveLink: entry.driveLink,
+      dimensions: entry.dimensions,
     },
     human: humanMetaOf(entry),
     phash: entry.phash || prev?.phash || "",
