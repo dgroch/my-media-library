@@ -141,6 +141,24 @@ export async function driveUploadFile(params: {
 }
 
 /**
+ * Delete a Drive file. Only used by the `check:drive` preflight to clean up
+ * after its test upload — the mirror itself never deletes.
+ */
+export async function deleteDriveFile(fileId: string): Promise<void> {
+  const token = await accessToken();
+  const url = new URL(`${driveConfig.apiBaseUrl}/files/${fileId}`);
+  url.searchParams.set("supportsAllDrives", "true");
+  const res = await fetch(url, {
+    method: "DELETE",
+    headers: { authorization: `Bearer ${token}` },
+  });
+  if (!res.ok && res.status !== 404) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(`Drive delete failed (${res.status}): ${detail.slice(0, 300)}`);
+  }
+}
+
+/**
  * Mirror an uploaded original to Drive, returning null (never throwing) when
  * Drive isn't configured or the call fails. The CDN object is the original, so
  * a missing mirror costs a backup, not the asset.

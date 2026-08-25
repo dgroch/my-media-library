@@ -61,7 +61,11 @@ Agents  ──▶ /openapi.json ──▶ discover + call the JSON API above
   is public and needs no Google sign-in) and offers Drive as an "also in Drive"
   link. Mirroring is optional and best-effort: with the env unset, or on any
   Drive error, the upload succeeds unchanged and the row simply has no Drive
-  Link. Because uploads now have a Drive Link too, `driveLink` alone no longer
+  Link. Verify a new setup with **`npm run check:drive`**, which uploads a test
+  file through the app's own `drive.ts` and deletes it again — worth running
+  because the mirror is deliberately quiet, so a misconfigured service account
+  otherwise shows up only as uploads silently missing their Drive Link.
+  Because uploads now have a Drive Link too, `driveLink` alone no longer
   identifies a downscaled preview — `Asset.cdnIsOriginal` does. It is read from
   the **raw** `Uploaded At` property, never from `ManifestEntry.uploaded_at`,
   which falls back to the page's created time and so is never empty.

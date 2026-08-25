@@ -186,6 +186,10 @@ export const driveConfig = {
     process.env.GOOGLE_DRIVE_UPLOAD_BASE_URL ??
     "https://www.googleapis.com/upload/drive/v3"
   ).replace(/\/+$/, ""),
+  // Non-upload calls (used only by the `check:drive` preflight cleanup).
+  apiBaseUrl: (
+    process.env.GOOGLE_DRIVE_API_BASE_URL ?? "https://www.googleapis.com/drive/v3"
+  ).replace(/\/+$/, ""),
 } as const;
 
 // The relation property on the Collections database that links to assets.
