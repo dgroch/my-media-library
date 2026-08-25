@@ -178,6 +178,10 @@ export const driveConfig = {
   // Destination folder id (a Shared Drive folder is fine).
   folderId: process.env.GOOGLE_DRIVE_FOLDER_ID ?? "",
   tokenUri: process.env.GOOGLE_DRIVE_TOKEN_URI ?? "https://oauth2.googleapis.com/token",
+  // `drive.file` is least-privilege: it covers files this app creates, which is
+  // all mirroring does. Widen to ".../auth/drive" here (no code change) if the
+  // service account turns out to need broader access to the target folder.
+  scope: process.env.GOOGLE_DRIVE_SCOPE ?? "https://www.googleapis.com/auth/drive.file",
   uploadBaseUrl: (
     process.env.GOOGLE_DRIVE_UPLOAD_BASE_URL ??
     "https://www.googleapis.com/upload/drive/v3"

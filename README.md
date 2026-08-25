@@ -62,8 +62,9 @@ Agents  ──▶ /openapi.json ──▶ discover + call the JSON API above
   link. Mirroring is optional and best-effort: with the env unset, or on any
   Drive error, the upload succeeds unchanged and the row simply has no Drive
   Link. Because uploads now have a Drive Link too, `driveLink` alone no longer
-  identifies a downscaled preview — `Asset.cdnIsOriginal` (set from `Uploaded
-  At`) does.
+  identifies a downscaled preview — `Asset.cdnIsOriginal` does. It is read from
+  the **raw** `Uploaded At` property, never from `ManifestEntry.uploaded_at`,
+  which falls back to the page's created time and so is never empty.
 - **Recorded resolution.** Uploads write the stored image's pixel size to the
   Manifest's `Dimensions` property, and it is carried through the search index
   and the API (`Asset.dimensions`), so the UI can state what resolution a link

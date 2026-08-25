@@ -62,6 +62,13 @@ export interface ManifestEntry {
   driveLink: string;
   /** Pixel size of the original as "WxH", or "" when unknown. */
   dimensions: string;
+  /**
+   * True when `url` is the untouched original (an app upload). Read from the
+   * RAW `Uploaded At` property, deliberately not from `uploaded_at` below —
+   * that field falls back to the page's created time and so is never empty,
+   * which would mark every Drive-synced row as CDN-original.
+   */
+  cdnIsOriginal: boolean;
   // Human channel ------------------------------------------------------------
   context: string;
   people: PersonTag[];
@@ -366,6 +373,7 @@ export function pageToManifestEntry(page: any): ManifestEntry {
     description: plainText(p[props.description]),
     driveLink: plainText(p[props.driveLink]),
     dimensions: plainText(p[props.dimensions]),
+    cdnIsOriginal: Boolean(p[humanProps.uploadedAt]?.date?.start),
     mediaType: detectMediaType(
       title,
       plainText(p[props.mimeType]),
@@ -501,6 +509,27 @@ export async function createAssetEntry(
     } as any),
   )) as any;
   return pageToManifestEntry(page);
+}
+
+/**
+ * Overwrite the recorded pixel size of the stored original. Needed after any
+ * step that replaces the stored file at the same key (overlay removal returns
+ * roughly 1MP whatever it is given), so the UI never advertises a resolution
+ * the file no longer has.
+ */
+export async function writeStoredDimensions(
+  pageId: string,
+  width?: number,
+  height?: number,
+): Promise<void> {
+  if (!width || !height) return;
+  const properties = await buildProperties({
+    [props.dimensions]: `${width}x${height}`,
+  });
+  if (Object.keys(properties).length === 0) return;
+  await notionRetry("writeStoredDimensions", () =>
+    notionClient().pages.update({ page_id: pageId, properties } as any),
+  );
 }
 
 /** PATCH semantics: provided fields replace the stored values (backfill/edit). */

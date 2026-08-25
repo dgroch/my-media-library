@@ -19,6 +19,7 @@ import {
   mergeContribution,
   pageToManifestEntry,
   writeManifest,
+  writeStoredDimensions,
   type AssetMetadataInput,
   type ManifestEntry,
 } from "./assets";
@@ -351,23 +352,43 @@ export async function recleanAsset(
     throw new Error("Failed to store the cleaned image.");
   }
 
+  // The stored file just changed size — the image model returns roughly 1MP
+  // whatever it is given — so correct the recorded dimensions. Without this the
+  // UI keeps advertising the pre-clean resolution for a file that no longer
+  // has it.
+  const cleanedMeta = await sharp(cleaned)
+    .metadata()
+    .catch(() => null);
+  try {
+    await writeStoredDimensions(entry.id, cleanedMeta?.width, cleanedMeta?.height);
+  } catch (err) {
+    console.error("reclean: recording dimensions failed", err);
+  }
+
   // Re-manifest on the cleaned image (best-effort) so the AI description no
   // longer narrates the removed overlay text.
   let updated = entry;
   if (geminiConfigured()) {
     try {
-      const meta = await sharp(cleaned).metadata();
       const manifest = await manifestImage({
         buffer: cleaned,
         mimeType: "image/jpeg",
         filename: entry.title,
-        width: meta.width,
-        height: meta.height,
+        width: cleanedMeta?.width,
+        height: cleanedMeta?.height,
       });
       updated = await writeManifest(entry.id, manifest);
     } catch (err) {
       console.error("reclean: manifesting failed", err);
     }
+  }
+  // Carry the corrected size on the returned entry too: without Gemini,
+  // `updated` is the pre-clean read and would re-index the stale dimensions.
+  if (cleanedMeta?.width && cleanedMeta?.height) {
+    updated = {
+      ...updated,
+      dimensions: `${cleanedMeta.width}x${cleanedMeta.height}`,
+    };
   }
   const status = await indexEntry(updated);
   return { cleaned: true, entry: { ...updated, status } };

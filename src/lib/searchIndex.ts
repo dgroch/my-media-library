@@ -317,8 +317,7 @@ export function upsertRuntimeAsset(
       mediaType: entry.mediaType,
       driveLink: entry.driveLink,
       dimensions: entry.dimensions,
-      // Anything reaching the runtime overlay came through the upload path.
-      cdnIsOriginal: Boolean(entry.uploaded_at),
+      cdnIsOriginal: entry.cdnIsOriginal,
     },
     human: humanMetaOf(entry),
     phash: entry.phash || prev?.phash || "",

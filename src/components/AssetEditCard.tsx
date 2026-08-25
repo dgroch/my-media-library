@@ -30,8 +30,8 @@ export interface ReviewEntry {
   driveLink?: string;
   /** Pixel size of the original, "WxH". */
   dimensions?: string;
-  /** Set on app uploads only — means `url` is the untouched original. */
-  uploaded_at?: string;
+  /** True when `url` is the untouched original (an app upload). */
+  cdnIsOriginal?: boolean;
   context: string;
   people: PersonTag[];
   product: string;
@@ -171,7 +171,7 @@ export default function AssetEditCard({
     url: entry.url,
     driveLink: entry.driveLink ?? "",
     dimensions: entry.dimensions,
-    cdnIsOriginal: Boolean(entry.uploaded_at),
+    cdnIsOriginal: Boolean(entry.cdnIsOriginal),
   };
   const original = originalSource(asset);
   const downscaled = previewIsDownscaled(asset);

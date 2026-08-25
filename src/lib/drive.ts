@@ -47,7 +47,7 @@ async function accessToken(): Promise<string> {
   const claims = base64url(
     JSON.stringify({
       iss: driveConfig.clientEmail,
-      scope: "https://www.googleapis.com/auth/drive.file",
+      scope: driveConfig.scope,
       aud: driveConfig.tokenUri,
       iat: now,
       exp: now + 3600,
@@ -69,7 +69,9 @@ async function accessToken(): Promise<string> {
   });
   if (!res.ok) {
     const detail = await res.text().catch(() => "");
-    throw new Error(`Drive token exchange failed (${res.status}): ${detail}`);
+    throw new Error(
+      `Drive token exchange failed (${res.status}): ${detail.slice(0, 300)}`,
+    );
   }
   const body = (await res.json()) as { access_token: string; expires_in: number };
   cachedToken = {
@@ -122,7 +124,10 @@ export async function driveUploadFile(params: {
       authorization: `Bearer ${token}`,
       "content-type": `multipart/related; boundary=${boundary}`,
     },
-    body: new Uint8Array(body),
+    // Buffer is already a Uint8Array — passing it straight through avoids a
+    // second full copy of the payload, which matters on the video path where
+    // a clip can be 100MB.
+    body,
   });
   if (!res.ok) {
     const detail = await res.text().catch(() => "");
