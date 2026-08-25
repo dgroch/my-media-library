@@ -30,6 +30,11 @@ export const props = {
   assetType: process.env.NOTION_PROP_ASSET_TYPE ?? "Asset Type",
   mimeType: process.env.NOTION_PROP_MIME_TYPE ?? "Mime Type",
   driveLink: process.env.NOTION_PROP_DRIVE_LINK ?? "Drive Link",
+  driveFileId: process.env.NOTION_PROP_DRIVE_FILE_ID ?? "Drive File ID",
+  // Pixel size of the original, "WxH". Written at upload (from the decoded
+  // image) and by the Drive crawler, so the UI can say what resolution the
+  // "open the original" link actually leads to.
+  dimensions: process.env.NOTION_PROP_DIMENSIONS ?? "Dimensions",
 } as const;
 
 // AI-channel properties on the Manifest — the enrichment side of the two-channel
@@ -152,6 +157,35 @@ export const uploadConfig = {
     /\/+$/,
     "",
   ),
+} as const;
+
+// ---------------------------------------------------------------------------
+// Google Drive mirror (uploaded originals)
+// ---------------------------------------------------------------------------
+// Every uploaded original is also pushed to a Drive folder, so app uploads sit
+// alongside the legacy Drive-synced corpus and are browsable in Drive. This is
+// a backup, NOT a resolution fix: the CDN object written by the ingest path is
+// already the untouched original. Mirroring is best-effort and entirely
+// optional — with these unset, uploads work exactly as before.
+//
+// Auth is a Google service account with write access to the target folder
+// (share the folder with the service account's email). Scope: drive.file.
+export const driveConfig = {
+  clientEmail: process.env.GOOGLE_DRIVE_CLIENT_EMAIL ?? "",
+  // PEM private key. Env vars can't hold newlines, so "\n" escapes are
+  // accepted and unescaped at signing time.
+  privateKey: process.env.GOOGLE_DRIVE_PRIVATE_KEY ?? "",
+  // Destination folder id (a Shared Drive folder is fine).
+  folderId: process.env.GOOGLE_DRIVE_FOLDER_ID ?? "",
+  tokenUri: process.env.GOOGLE_DRIVE_TOKEN_URI ?? "https://oauth2.googleapis.com/token",
+  // `drive.file` is least-privilege: it covers files this app creates, which is
+  // all mirroring does. Widen to ".../auth/drive" here (no code change) if the
+  // service account turns out to need broader access to the target folder.
+  scope: process.env.GOOGLE_DRIVE_SCOPE ?? "https://www.googleapis.com/auth/drive.file",
+  uploadBaseUrl: (
+    process.env.GOOGLE_DRIVE_UPLOAD_BASE_URL ??
+    "https://www.googleapis.com/upload/drive/v3"
+  ).replace(/\/+$/, ""),
 } as const;
 
 // The relation property on the Collections database that links to assets.

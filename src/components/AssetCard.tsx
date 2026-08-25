@@ -2,6 +2,12 @@
 
 import Link from "next/link";
 
+import {
+  formatDimensions,
+  originalSource,
+  originalTitle,
+  previewIsDownscaled,
+} from "@/lib/original";
 import type { Asset } from "@/lib/types";
 
 interface Props {
@@ -27,8 +33,13 @@ export default function AssetCard({
 
   const isVideo = asset.mediaType === "video";
   const hasImage = Boolean(asset.url);
-  // Where the "open" affordance points: CDN preview first, else the original.
-  const openHref = asset.url || asset.driveLink || "";
+  // Where the "open" affordance points: the ORIGINAL, which for a Drive-synced
+  // row is the Drive master — the CDN url on those rows is a downscaled
+  // preview, so pointing here at `url` (as this once did) left everyone stuck
+  // with the small version.
+  const original = originalSource(asset);
+  const size = formatDimensions(asset.dimensions);
+  const downscaled = previewIsDownscaled(asset);
 
   return (
     <div
@@ -52,13 +63,13 @@ export default function AssetCard({
           >
             ✎
           </Link>
-          {openHref && (
+          {original && (
             <a
-              className="open-link"
-              href={openHref}
+              className={`open-link${original.kind === "drive" ? " is-drive" : ""}`}
+              href={original.href}
               target="_blank"
               rel="noreferrer"
-              title={isVideo ? "Open video" : "Open full size"}
+              title={originalTitle(asset)}
               onClick={(e) => e.stopPropagation()}
             >
               ↗
@@ -67,7 +78,26 @@ export default function AssetCard({
         </div>
       </div>
 
-      {isVideo && <span className="badge">▶ Video</span>}
+      {(isVideo || downscaled) && (
+        <div className="badges">
+          {isVideo && <span className="badge">▶ Video</span>}
+          {/* Say so when the tile is a downscaled preview, so the
+              higher-resolution original behind ↗ is discoverable rather than a
+              hidden affordance. */}
+          {downscaled && original && (
+            <a
+              className="badge badge-original"
+              href={original.href}
+              target="_blank"
+              rel="noreferrer"
+              title={originalTitle(asset)}
+              onClick={(e) => e.stopPropagation()}
+            >
+              ⤢ Original on Drive{size ? ` · ${size}` : ""}
+            </a>
+          )}
+        </div>
+      )}
 
       {hasImage ? (
         // eslint-disable-next-line @next/next/no-img-element

@@ -709,14 +709,23 @@ export async function GET(request: Request) {
       schemas: {
         Asset: {
           type: "object",
-          required: ["id", "title", "url", "description", "mediaType", "driveLink"],
+          required: [
+            "id",
+            "title",
+            "url",
+            "description",
+            "mediaType",
+            "driveLink",
+            "dimensions",
+            "cdnIsOriginal",
+          ],
           properties: {
             id: { type: "string", description: "Notion page id of the asset." },
             title: { type: "string" },
             url: {
               type: "string",
               description:
-                "CDN preview image URL. May be empty for videos / rows with no preview.",
+                "CDN image URL. May be empty for videos / rows with no preview. On Drive-synced rows this is a DOWNSCALED preview of the Drive master — use `driveLink` for full resolution. On uploaded rows it is the untouched original.",
             },
             description: { type: "string" },
             mediaType: {
@@ -725,7 +734,18 @@ export async function GET(request: Request) {
             },
             driveLink: {
               type: "string",
-              description: "Link to the original file (fallback when no preview URL).",
+              description:
+                "Google Drive link to the full-resolution original. Set only on Drive-synced rows; empty on uploaded rows, where `url` is itself the original.",
+            },
+            dimensions: {
+              type: "string",
+              description:
+                'Pixel size of the ORIGINAL as "WxH" (e.g. "1080x1920"), or empty when unknown. Describes the original, not the preview at `url`.',
+            },
+            cdnIsOriginal: {
+              type: "boolean",
+              description:
+                "True when `url` is itself the untouched original (an app upload). False for Drive-synced rows, where `url` is a downscaled preview. Uploads are mirrored to Drive, so `driveLink` alone does not distinguish them.",
             },
           },
         },
@@ -811,6 +831,7 @@ export async function GET(request: Request) {
             "description",
             "mediaType",
             "driveLink",
+            "dimensions",
             "context",
             "people",
             "product",
@@ -834,7 +855,15 @@ export async function GET(request: Request) {
               description: "AI-classifier description (the enrichment channel).",
             },
             mediaType: { type: "string", enum: ["image", "video", "other"] },
-            driveLink: { type: "string" },
+            driveLink: {
+              type: "string",
+              description:
+                "Google Drive link: the full-resolution original on Drive-synced rows, or the mirror of the CDN original on uploaded rows.",
+            },
+            dimensions: {
+              type: "string",
+              description: 'Pixel size of the original as "WxH", or empty.',
+            },
             context: {
               type: "string",
               description: "Verbatim human description — never overwritten by AI.",

@@ -19,11 +19,13 @@ import {
   mergeContribution,
   pageToManifestEntry,
   writeManifest,
+  writeStoredDimensions,
   type AssetMetadataInput,
   type ManifestEntry,
 } from "./assets";
 import { geminiConfigured, uploadConfig } from "./config";
 import { removeOverlays } from "./cleanup";
+import { mirrorToDrive } from "./drive";
 import { embedQuery } from "./embeddings";
 import { manifestImage, type AssetManifest } from "./gemini";
 import { hammingDistance, perceptualHash } from "./phash";
@@ -162,6 +164,23 @@ export async function ingestImage(params: IngestParams): Promise<IngestResult> {
   }
 
   const url = `${uploadConfig.cdnBaseUrl}/${slug}`;
+  // The object above IS the original — nothing in this path downscales — so
+  // its pixel size is what "open the original" leads to. Recorded on the row
+  // for the UI; a metadata read that fails must not fail the upload.
+  const stored = await sharp(image)
+    .metadata()
+    .catch(() => null);
+
+  // Mirror the original to Drive so app uploads are browsable alongside the
+  // legacy Drive-synced corpus. Best-effort by construction: the CDN object
+  // above is already the original, so a Drive failure costs a backup, not the
+  // asset, and returns null rather than throwing.
+  const drive = await mirrorToDrive({
+    name: slug,
+    mimeType: storedMime,
+    bytes: image,
+  });
+
   let entry = await createAssetEntry({
     filename: slug,
     url,
@@ -169,19 +188,21 @@ export async function ingestImage(params: IngestParams): Promise<IngestResult> {
     sha256,
     phash,
     metadata: params.metadata,
+    width: stored?.width,
+    height: stored?.height,
+    drive,
   });
 
   // AI enrichment (best-effort) — never fails the ingest.
   let manifest: AssetManifest | null = null;
   if ((params.runManifest ?? true) && geminiConfigured()) {
     try {
-      const meta = await sharp(image).metadata();
       manifest = await manifestImage({
         buffer: image,
         mimeType: storedMime,
         filename: slug,
-        width: meta.width,
-        height: meta.height,
+        width: stored?.width,
+        height: stored?.height,
       });
       entry = await writeManifest(entry.id, manifest);
     } catch (err) {
@@ -244,6 +265,11 @@ export async function ingestVideoFile(params: {
     throw new Error("Failed to store the video.");
   }
 
+  const drive = await mirrorToDrive({
+    name: slug,
+    mimeType: params.storedMime,
+    bytes: params.bytes,
+  });
   const entry = await createAssetEntry({
     filename: slug,
     url: `${uploadConfig.cdnBaseUrl}/${slug}`,
@@ -251,6 +277,7 @@ export async function ingestVideoFile(params: {
     sha256,
     phash: "",
     metadata: params.metadata,
+    drive,
   });
   const status = await indexEntry(entry);
   return {
@@ -325,23 +352,43 @@ export async function recleanAsset(
     throw new Error("Failed to store the cleaned image.");
   }
 
+  // The stored file just changed size — the image model returns roughly 1MP
+  // whatever it is given — so correct the recorded dimensions. Without this the
+  // UI keeps advertising the pre-clean resolution for a file that no longer
+  // has it.
+  const cleanedMeta = await sharp(cleaned)
+    .metadata()
+    .catch(() => null);
+  try {
+    await writeStoredDimensions(entry.id, cleanedMeta?.width, cleanedMeta?.height);
+  } catch (err) {
+    console.error("reclean: recording dimensions failed", err);
+  }
+
   // Re-manifest on the cleaned image (best-effort) so the AI description no
   // longer narrates the removed overlay text.
   let updated = entry;
   if (geminiConfigured()) {
     try {
-      const meta = await sharp(cleaned).metadata();
       const manifest = await manifestImage({
         buffer: cleaned,
         mimeType: "image/jpeg",
         filename: entry.title,
-        width: meta.width,
-        height: meta.height,
+        width: cleanedMeta?.width,
+        height: cleanedMeta?.height,
       });
       updated = await writeManifest(entry.id, manifest);
     } catch (err) {
       console.error("reclean: manifesting failed", err);
     }
+  }
+  // Carry the corrected size on the returned entry too: without Gemini,
+  // `updated` is the pre-clean read and would re-index the stale dimensions.
+  if (cleanedMeta?.width && cleanedMeta?.height) {
+    updated = {
+      ...updated,
+      dimensions: `${cleanedMeta.width}x${cleanedMeta.height}`,
+    };
   }
   const status = await indexEntry(updated);
   return { cleaned: true, entry: { ...updated, status } };

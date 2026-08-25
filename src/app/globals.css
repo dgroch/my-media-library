@@ -8,6 +8,7 @@
   --accent: #6d8bff;
   --accent-contrast: #ffffff;
   --danger: #e5484d;
+  --warn: #e0a04a;
   --radius: 12px;
   --maxw: 1400px;
 }
@@ -383,18 +384,41 @@ main {
   word-break: break-word;
 }
 
-.badge {
+/* Badge stack (video marker, "original on Drive" marker). A container so a
+   Drive-synced video can carry both without them overlapping. */
+.badges {
   position: absolute;
   left: 10px;
   bottom: 42px;
+  right: 10px;
   z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  pointer-events: none;
+}
+
+.badge {
   padding: 3px 8px;
   border-radius: 999px;
   font-size: 11px;
   font-weight: 600;
   color: #fff;
   background: rgba(0, 0, 0, 0.6);
-  pointer-events: none;
+}
+
+/* The full-resolution master is elsewhere. This badge is itself the link to
+   it — always visible (unlike the hover-only overlay), so the high-res file is
+   discoverable without knowing to hover. `pointer-events` is re-enabled just
+   for the badge; the rest of the stack stays click-through. */
+.badge-original {
+  background: var(--accent);
+  pointer-events: auto;
+  text-decoration: none;
+}
+
+.badge-original:hover {
+  filter: brightness(1.12);
 }
 
 .placeholder {
@@ -859,6 +883,47 @@ select.search-input {
 .edit-card-media .placeholder {
   border-radius: 8px;
   min-height: 180px;
+}
+
+/* "Open the original" line under the preview on the edit page. */
+.edit-card-original {
+  margin: 10px 0 0;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.edit-card-original a {
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.edit-card-original a:hover {
+  text-decoration: underline;
+}
+
+.edit-card-original .muted {
+  color: var(--text-muted);
+}
+
+/* Inline hint under a form control. */
+.hint {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.hint.warn {
+  color: var(--warn);
+}
+
+/* Destructive-action warning (caption removal overwrites the original). */
+.edit-card-warn {
+  margin: 6px 0 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--warn);
 }
 
 .edit-card-ai {

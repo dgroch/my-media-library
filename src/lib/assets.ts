@@ -54,7 +54,21 @@ export interface ManifestEntry {
   /** AI-classifier description (the enrichment channel). */
   description: string;
   mediaType: MediaType;
+  /**
+   * Google Drive link to the original. Present only on Drive-synced rows,
+   * where `url` is a downscaled preview and this is the full-resolution
+   * master. Uploaded rows store the untouched original at `url` instead.
+   */
   driveLink: string;
+  /** Pixel size of the original as "WxH", or "" when unknown. */
+  dimensions: string;
+  /**
+   * True when `url` is the untouched original (an app upload). Read from the
+   * RAW `Uploaded At` property, deliberately not from `uploaded_at` below —
+   * that field falls back to the page's created time and so is never empty,
+   * which would mark every Drive-synced row as CDN-original.
+   */
+  cdnIsOriginal: boolean;
   // Human channel ------------------------------------------------------------
   context: string;
   people: PersonTag[];
@@ -358,6 +372,8 @@ export function pageToManifestEntry(page: any): ManifestEntry {
     url: plainText(p[props.imageUrl]),
     description: plainText(p[props.description]),
     driveLink: plainText(p[props.driveLink]),
+    dimensions: plainText(p[props.dimensions]),
+    cdnIsOriginal: Boolean(p[humanProps.uploadedAt]?.date?.start),
     mediaType: detectMediaType(
       title,
       plainText(p[props.mimeType]),
@@ -455,6 +471,11 @@ export interface CreateAssetInput {
   sha256: string;
   phash: string;
   metadata: AssetMetadataInput;
+  /** Pixel size of the stored original, when the decoder reported it. */
+  width?: number;
+  height?: number;
+  /** The Drive mirror of this original, when mirroring is on and succeeded. */
+  drive?: { id: string; webViewLink: string } | null;
 }
 
 export async function createAssetEntry(
@@ -467,6 +488,14 @@ export async function createAssetEntry(
     [props.mimeType]: input.mimeType,
     [humanProps.sha256]: input.sha256,
     [humanProps.phash]: input.phash,
+    // Recorded so the UI can state the resolution behind the "open the
+    // original" link. Skipped when the decoder didn't report a size.
+    [props.dimensions]:
+      input.width && input.height ? `${input.width}x${input.height}` : undefined,
+    // The Drive mirror, when there is one. Same two properties the legacy
+    // Drive crawler writes, so uploaded rows are shaped like crawled ones.
+    [props.driveLink]: input.drive?.webViewLink,
+    [props.driveFileId]: input.drive?.id,
     [humanProps.uploadedAt]: new Date().toISOString(),
     // `internal` is the default rights kind (spec) — last so the spread's
     // possibly-undefined value can't clobber it.
@@ -480,6 +509,27 @@ export async function createAssetEntry(
     } as any),
   )) as any;
   return pageToManifestEntry(page);
+}
+
+/**
+ * Overwrite the recorded pixel size of the stored original. Needed after any
+ * step that replaces the stored file at the same key (overlay removal returns
+ * roughly 1MP whatever it is given), so the UI never advertises a resolution
+ * the file no longer has.
+ */
+export async function writeStoredDimensions(
+  pageId: string,
+  width?: number,
+  height?: number,
+): Promise<void> {
+  if (!width || !height) return;
+  const properties = await buildProperties({
+    [props.dimensions]: `${width}x${height}`,
+  });
+  if (Object.keys(properties).length === 0) return;
+  await notionRetry("writeStoredDimensions", () =>
+    notionClient().pages.update({ page_id: pageId, properties } as any),
+  );
 }
 
 /** PATCH semantics: provided fields replace the stored values (backfill/edit). */

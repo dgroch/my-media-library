@@ -341,6 +341,14 @@ function Uploader() {
           Remove captions / on-screen text from photos (Instagram stories, OSTs)
           — leave off for clean shots
         </label>
+        {removeChromeImages && (
+          <p className="hint warn">
+            ⚠ The image model returns about 1 megapixel whatever you feed it, and
+            the cleaned version is what gets stored — so this trades resolution
+            for a caption-free shot. Leave it off for anything you want at full
+            size.
+          </p>
+        )}
       </div>
 
       <div
