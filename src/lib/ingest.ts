@@ -18,6 +18,7 @@ import {
   findAssetBySha256,
   mergeContribution,
   pageToManifestEntry,
+  writeDriveMirror,
   writeManifest,
   writeStoredDimensions,
   type AssetMetadataInput,
@@ -26,6 +27,7 @@ import {
 import { geminiConfigured, uploadConfig } from "./config";
 import { removeOverlays } from "./cleanup";
 import { mirrorToDrive } from "./drive";
+import { chooseDriveFolder, type RoutingSubject } from "./driveRouting";
 import { embedQuery } from "./embeddings";
 import { manifestImage, type AssetManifest } from "./gemini";
 import { hammingDistance, perceptualHash } from "./phash";
@@ -171,16 +173,6 @@ export async function ingestImage(params: IngestParams): Promise<IngestResult> {
     .metadata()
     .catch(() => null);
 
-  // Mirror the original to Drive so app uploads are browsable alongside the
-  // legacy Drive-synced corpus. Best-effort by construction: the CDN object
-  // above is already the original, so a Drive failure costs a backup, not the
-  // asset, and returns null rather than throwing.
-  const drive = await mirrorToDrive({
-    name: slug,
-    mimeType: storedMime,
-    bytes: image,
-  });
-
   let entry = await createAssetEntry({
     filename: slug,
     url,
@@ -190,7 +182,6 @@ export async function ingestImage(params: IngestParams): Promise<IngestResult> {
     metadata: params.metadata,
     width: stored?.width,
     height: stored?.height,
-    drive,
   });
 
   // AI enrichment (best-effort) — never fails the ingest.
@@ -211,6 +202,19 @@ export async function ingestImage(params: IngestParams): Promise<IngestResult> {
     }
   }
 
+  // Mirror the original into the existing Drive library. Runs here, after
+  // manifesting, because the folder router files on what the asset actually
+  // depicts — so it needs the description and tags Gemini just produced.
+  // Best-effort throughout: the CDN object is already the original, so a Drive
+  // failure costs a backup, not the asset.
+  entry =
+    (await mirrorEntry(entry, {
+      bytes: image,
+      mimeType: storedMime,
+      slug,
+      manifest,
+    })) ?? entry;
+
   const status = await indexEntry(entry);
   return {
     kind: "created",
@@ -220,6 +224,60 @@ export async function ingestImage(params: IngestParams): Promise<IngestResult> {
     manifest,
     cleaned,
   };
+}
+
+/**
+ * Route an asset to a Drive folder, upload it there, and record the result on
+ * the row. Returns the refreshed entry, or null when nothing was written —
+ * every failure inside is swallowed, since this is a backup step.
+ */
+async function mirrorEntry(
+  entry: ManifestEntry,
+  file: {
+    bytes: Buffer;
+    mimeType: string;
+    slug: string;
+    manifest: AssetManifest | null;
+  },
+): Promise<ManifestEntry | null> {
+  const subject: RoutingSubject = {
+    filename: file.slug,
+    mediaType: entry.mediaType,
+    description: entry.description || file.manifest?.overall_description,
+    product: entry.product,
+    productName: file.manifest?.product_classification?.product_name ?? undefined,
+    contentType: file.manifest?.content_type,
+    visualTags: file.manifest?.visual_tags?.join(", "),
+    // The flowers/products the vision pass named are the strongest routing
+    // signal after the product itself — a "Hellebore" folder matches here.
+    products: file.manifest?.products_or_flowers,
+    context: entry.context,
+    tags: entry.tags,
+  };
+
+  let destination;
+  try {
+    destination = await chooseDriveFolder(subject);
+  } catch (err) {
+    console.error("[drive-mirror] routing failed", err);
+    return null;
+  }
+
+  const drive = await mirrorToDrive({
+    name: file.slug,
+    mimeType: file.mimeType,
+    bytes: file.bytes,
+    parentId: destination.id,
+    parentPath: destination.path,
+  });
+  if (!drive) return null;
+
+  try {
+    return await writeDriveMirror(entry.id, drive);
+  } catch (err) {
+    console.error("[drive-mirror] recording the Drive link failed", err);
+    return null;
+  }
 }
 
 /**
@@ -265,20 +323,25 @@ export async function ingestVideoFile(params: {
     throw new Error("Failed to store the video.");
   }
 
-  const drive = await mirrorToDrive({
-    name: slug,
-    mimeType: params.storedMime,
-    bytes: params.bytes,
-  });
-  const entry = await createAssetEntry({
+  let entry = await createAssetEntry({
     filename: slug,
     url: `${uploadConfig.cdnBaseUrl}/${slug}`,
     mimeType: params.storedMime,
     sha256,
     phash: "",
     metadata: params.metadata,
-    drive,
   });
+
+  // Videos have no Gemini manifest, so the router files them on the human
+  // channel alone (context, product, tags).
+  entry =
+    (await mirrorEntry(entry, {
+      bytes: params.bytes,
+      mimeType: params.storedMime,
+      slug,
+      manifest: null,
+    })) ?? entry;
+
   const status = await indexEntry(entry);
   return {
     kind: "created",

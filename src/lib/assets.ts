@@ -474,8 +474,6 @@ export interface CreateAssetInput {
   /** Pixel size of the stored original, when the decoder reported it. */
   width?: number;
   height?: number;
-  /** The Drive mirror of this original, when mirroring is on and succeeded. */
-  drive?: { id: string; webViewLink: string } | null;
 }
 
 export async function createAssetEntry(
@@ -492,10 +490,6 @@ export async function createAssetEntry(
     // original" link. Skipped when the decoder didn't report a size.
     [props.dimensions]:
       input.width && input.height ? `${input.width}x${input.height}` : undefined,
-    // The Drive mirror, when there is one. Same two properties the legacy
-    // Drive crawler writes, so uploaded rows are shaped like crawled ones.
-    [props.driveLink]: input.drive?.webViewLink,
-    [props.driveFileId]: input.drive?.id,
     [humanProps.uploadedAt]: new Date().toISOString(),
     // `internal` is the default rights kind (spec) — last so the spread's
     // possibly-undefined value can't clobber it.
@@ -509,6 +503,26 @@ export async function createAssetEntry(
     } as any),
   )) as any;
   return pageToManifestEntry(page);
+}
+
+/**
+ * Record the Drive mirror on an existing row. Separate from createAssetEntry
+ * because the mirror now runs after manifesting — the folder router needs the
+ * AI description to choose a destination.
+ */
+export async function writeDriveMirror(
+  pageId: string,
+  drive: { id: string; webViewLink: string },
+): Promise<ManifestEntry | null> {
+  const properties = await buildProperties({
+    [props.driveLink]: drive.webViewLink,
+    [props.driveFileId]: drive.id,
+  });
+  if (Object.keys(properties).length === 0) return null;
+  const updated = (await notionRetry("writeDriveMirror", () =>
+    notionClient().pages.update({ page_id: pageId, properties } as any),
+  )) as any;
+  return pageToManifestEntry(updated);
 }
 
 /**

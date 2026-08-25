@@ -41,6 +41,9 @@ if (missing.length > 0 || !driveConfigured()) {
 console.log(`→ service account: ${driveConfig.clientEmail}`);
 console.log(`→ folder:          ${driveConfig.folderId}`);
 console.log(`→ scope:           ${driveConfig.scope}`);
+console.log(
+  `→ routing:         ${driveConfig.routing ? `on (root ${driveConfig.rootFolderId || driveConfig.folderId})` : "off"}`,
+);
 
 // A PEM pasted without escaping is the most common setup mistake, and it fails
 // deep inside crypto with an opaque DECODER error. Catch it here instead.
@@ -97,6 +100,39 @@ try {
     `${red("!")} could not delete the test file — remove ${file.id} by hand.`,
     err instanceof Error ? err.message : err,
   );
+}
+
+// --- 4. Folder routing ----------------------------------------------------
+
+if (!driveConfig.routing) {
+  console.log(dim("\n→ routing disabled — everything lands in the fallback folder"));
+} else {
+  console.log(dim("\n→ reading the folder tree …"));
+  const { driveFolderTree, folderCandidates } = await import("../src/lib/driveFolders");
+  const tree = await driveFolderTree();
+
+  if (tree.folders.length === 0) {
+    console.warn(
+      `${red("!")} No folders under the configured root — every upload will land in the fallback folder.`,
+    );
+  } else {
+    console.log(
+      `${green("✓")} ${tree.folders.length} folders${tree.truncated ? " (truncated — raise GOOGLE_DRIVE_MAX_DEPTH / _MAX_FOLDERS)" : ""}`,
+    );
+    for (const folder of tree.folders.filter((f) => f.depth === 1).slice(0, 12)) {
+      const children = tree.folders.filter((f) => f.path.startsWith(`${folder.path}/`)).length;
+      console.log(dim(`    ${folder.path}${children ? ` (${children} below)` : ""}`));
+    }
+
+    // Dry-run the shortlist so a misconfigured root shows up as obviously
+    // wrong candidates rather than as quietly misfiled uploads later.
+    const sample = "bouquet of white roses and eucalyptus, product photography";
+    const candidates = folderCandidates(tree.folders, sample, "");
+    console.log(dim(`\n  shortlist for "${sample}":`));
+    console.log(
+      dim(`    ${candidates.slice(0, 5).map((f) => f.path).join("  |  ") || "(none)"}`),
+    );
+  }
 }
 
 console.log(`\n${green("Drive mirror is ready.")} Uploads will get a Drive Link from here on.`);
