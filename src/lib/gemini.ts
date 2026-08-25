@@ -338,6 +338,75 @@ export async function editImage(input: {
 // the best shot within each unique scene of a video (see frames.ts).
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Text-only call (folder routing) — same providers, no image part.
+// ---------------------------------------------------------------------------
+
+export async function callText(prompt: string): Promise<string> {
+  if (!geminiConfig.apiKey) {
+    throw new Error("Gemini is not configured (set GEMINI_API_KEY).");
+  }
+  if (geminiConfig.provider === "openrouter") {
+    const res = await fetch(`${geminiConfig.openrouterBaseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${geminiConfig.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: geminiConfig.model,
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0,
+        response_format: { type: "json_object" },
+      }),
+    });
+    if (!res.ok) {
+      throw new Error(
+        `Gemini (openrouter) text failed (${res.status}): ${await res.text()}`,
+      );
+    }
+    const json = (await res.json()) as {
+      choices?: Array<{ message?: { content?: string } }>;
+    };
+    const text = json.choices?.[0]?.message?.content;
+    if (!text) throw new Error("Gemini (openrouter) returned no text");
+    return text;
+  }
+
+  const url = `${geminiConfig.googleBaseUrl}/models/${geminiConfig.model}:generateContent`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-goog-api-key": geminiConfig.apiKey,
+    },
+    body: JSON.stringify({
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      generationConfig: { responseMimeType: "application/json", temperature: 0 },
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(`Gemini (google) text failed (${res.status}): ${await res.text()}`);
+  }
+  const json = (await res.json()) as {
+    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+  };
+  const text = json.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("");
+  if (!text) throw new Error("Gemini (google) returned no text");
+  return text;
+}
+
+/** Pull a JSON object out of a model reply that may be fenced or padded. */
+export function extractJsonObject(raw: string): Record<string, unknown> {
+  let text = raw.trim();
+  const fence = /```(?:json)?\s*([\s\S]*?)```/i.exec(text);
+  if (fence) text = fence[1].trim();
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start >= 0 && end > start) text = text.slice(start, end + 1);
+  return JSON.parse(text) as Record<string, unknown>;
+}
+
 export interface FrameScore {
   /** Is the subject clear and prominent (0-10). */
   subject: number;

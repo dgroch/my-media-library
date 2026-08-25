@@ -10,6 +10,7 @@
     "setup:collections": "node scripts/setup-collections.mjs",
     "setup:upload": "node scripts/setup-upload.mjs",
     "convert:multiselect": "node scripts/convert-multiselect.mjs",
+    "check:drive": "node --conditions=react-server --import tsx scripts/check-drive.mts",
     "worker:video": "node --conditions=react-server --import tsx scripts/video-worker.ts",
     "build:index": "node --max-old-space-size=400 scripts/build-index.mjs",
     "upload:index": "node scripts/upload-index.mjs",

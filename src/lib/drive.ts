@@ -91,6 +91,8 @@ export async function driveUploadFile(params: {
   name: string;
   mimeType: string;
   bytes: Buffer;
+  /** Destination folder; defaults to the configured fallback folder. */
+  parentId?: string;
 }): Promise<DriveFile> {
   const token = await accessToken();
   const boundary = `mml-${Date.now().toString(36)}-${Math.random()
@@ -98,7 +100,7 @@ export async function driveUploadFile(params: {
     .slice(2)}`;
   const metadata = JSON.stringify({
     name: params.name,
-    parents: [driveConfig.folderId],
+    parents: [params.parentId || driveConfig.folderId],
   });
 
   // multipart/related: a JSON metadata part, then the raw media part. Built as
@@ -140,6 +142,65 @@ export async function driveUploadFile(params: {
   };
 }
 
+/** Immediate child folders of `parentId`, following pagination. */
+export async function driveListChildFolders(
+  parentId: string,
+): Promise<Array<{ id: string; name: string }>> {
+  const token = await accessToken();
+  const out: Array<{ id: string; name: string }> = [];
+  let pageToken: string | undefined;
+
+  do {
+    const url = new URL(`${driveConfig.apiBaseUrl}/files`);
+    url.searchParams.set(
+      "q",
+      `'${parentId}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
+    );
+    url.searchParams.set("fields", "nextPageToken,files(id,name)");
+    url.searchParams.set("pageSize", "1000");
+    // Shared Drives need both of these or the query returns nothing.
+    url.searchParams.set("supportsAllDrives", "true");
+    url.searchParams.set("includeItemsFromAllDrives", "true");
+    if (pageToken) url.searchParams.set("pageToken", pageToken);
+
+    const res = await fetch(url, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      throw new Error(
+        `Drive folder listing failed (${res.status}): ${detail.slice(0, 300)}`,
+      );
+    }
+    const json = (await res.json()) as {
+      nextPageToken?: string;
+      files?: Array<{ id: string; name: string }>;
+    };
+    out.push(...(json.files ?? []));
+    pageToken = json.nextPageToken;
+  } while (pageToken);
+
+  return out;
+}
+
+/**
+ * Delete a Drive file. Only used by the `check:drive` preflight to clean up
+ * after its test upload — the mirror itself never deletes.
+ */
+export async function deleteDriveFile(fileId: string): Promise<void> {
+  const token = await accessToken();
+  const url = new URL(`${driveConfig.apiBaseUrl}/files/${fileId}`);
+  url.searchParams.set("supportsAllDrives", "true");
+  const res = await fetch(url, {
+    method: "DELETE",
+    headers: { authorization: `Bearer ${token}` },
+  });
+  if (!res.ok && res.status !== 404) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(`Drive delete failed (${res.status}): ${detail.slice(0, 300)}`);
+  }
+}
+
 /**
  * Mirror an uploaded original to Drive, returning null (never throwing) when
  * Drive isn't configured or the call fails. The CDN object is the original, so
@@ -149,11 +210,16 @@ export async function mirrorToDrive(params: {
   name: string;
   mimeType: string;
   bytes: Buffer;
+  parentId?: string;
+  /** Human-readable destination, for the log line only. */
+  parentPath?: string;
 }): Promise<DriveFile | null> {
   if (!driveConfigured()) return null;
   try {
     const file = await driveUploadFile(params);
-    console.log(`[drive-mirror] ${params.name} → ${file.id}`);
+    console.log(
+      `[drive-mirror] ${params.name} → ${params.parentPath || "(fallback folder)"} (${file.id})`,
+    );
     return file;
   } catch (err) {
     console.error("[drive-mirror] failed, asset kept on the CDN only —", err);

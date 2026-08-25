@@ -61,10 +61,33 @@ Agents  ──▶ /openapi.json ──▶ discover + call the JSON API above
   is public and needs no Google sign-in) and offers Drive as an "also in Drive"
   link. Mirroring is optional and best-effort: with the env unset, or on any
   Drive error, the upload succeeds unchanged and the row simply has no Drive
-  Link. Because uploads now have a Drive Link too, `driveLink` alone no longer
+  Link, filed into the **existing** folder the asset belongs in — see below.
+  Verify a new setup with **`npm run check:drive`**, which uploads a test
+  file through the app's own `drive.ts`, deletes it again, and prints the
+  folder tree the router will choose from — worth running
+  because the mirror is deliberately quiet, so a misconfigured service account
+  otherwise shows up only as uploads silently missing their Drive Link.
+  Because uploads now have a Drive Link too, `driveLink` alone no longer
   identifies a downscaled preview — `Asset.cdnIsOriginal` does. It is read from
   the **raw** `Uploaded At` property, never from `ManifestEntry.uploaded_at`,
   which falls back to the page's created time and so is never empty.
+- **Folder routing.** The mirror files each upload into the library's existing
+  folders rather than a flat dump. `src/lib/driveFolders.ts` walks and caches
+  the tree under the configured root and narrows it to a shortlist by word
+  overlap (lightly stemmed, so "candle" matches a `Candles` folder); then
+  `src/lib/driveRouting.ts` asks Gemini to pick from that shortlist, using the
+  AI description, visual tags and named products alongside the human context —
+  which is why the mirror runs **after** manifesting rather than before.
+
+  The model's answer is constrained on both sides: it only ever sees folders
+  that exist, and its reply is matched back against that list before anything
+  is uploaded. An invented path, an off-list answer, a confidence below
+  `GOOGLE_DRIVE_MIN_CONFIDENCE`, a missing Gemini key or an unreadable tree all
+  land the asset in the fallback folder instead. Nothing is ever created, and
+  misfiling is treated as worse than not filing — an asset in the inbox is
+  merely unsorted, whereas one in a plausible-looking wrong folder is lost.
+  Sibling folders that share a name (real libraries have several) are collapsed
+  to one candidate so placement stays deterministic.
 - **Recorded resolution.** Uploads write the stored image's pixel size to the
   Manifest's `Dimensions` property, and it is carried through the search index
   and the API (`Asset.dimensions`), so the UI can state what resolution a link

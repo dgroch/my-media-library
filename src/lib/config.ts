@@ -175,8 +175,31 @@ export const driveConfig = {
   // PEM private key. Env vars can't hold newlines, so "\n" escapes are
   // accepted and unescaped at signing time.
   privateKey: process.env.GOOGLE_DRIVE_PRIVATE_KEY ?? "",
-  // Destination folder id (a Shared Drive folder is fine).
+  // Fallback destination: where an asset lands when the router can't place it
+  // (routing off, no candidates, or the model declined to choose).
   folderId: process.env.GOOGLE_DRIVE_FOLDER_ID ?? "",
+  // Root of the existing folder tree the router files into. Defaults to the
+  // fallback folder, so a flat setup needs no extra config.
+  rootFolderId: process.env.GOOGLE_DRIVE_ROOT_FOLDER_ID ?? "",
+  // Let the AI pick the destination from the real tree. Off → everything goes
+  // to `folderId`.
+  routing: (process.env.GOOGLE_DRIVE_ROUTING ?? "true").toLowerCase() !== "false",
+  // Tree-walk bounds. The tree is walked breadth-first, so a cap keeps the
+  // shallow (most useful) folders and drops the deep tail.
+  maxFolderDepth: Number(process.env.GOOGLE_DRIVE_MAX_DEPTH ?? "4"),
+  maxFolders: Number(process.env.GOOGLE_DRIVE_MAX_FOLDERS ?? "4000"),
+  // Concurrent folder listings while walking the tree.
+  listConcurrency: Number(process.env.GOOGLE_DRIVE_LIST_CONCURRENCY ?? "8"),
+  // Give up on routing after this long and use the fallback folder, so a slow
+  // or hung Drive/Gemini call can never hold up an upload.
+  routingTimeoutMs: Number(process.env.GOOGLE_DRIVE_ROUTING_TIMEOUT_MS ?? "20000"),
+  // How long the folder tree is cached in-process.
+  folderCacheMs: Number(process.env.GOOGLE_DRIVE_FOLDER_CACHE_MS ?? 30 * 60 * 1000),
+  // How many folders the model is asked to choose between.
+  maxCandidates: Number(process.env.GOOGLE_DRIVE_MAX_CANDIDATES ?? "40"),
+  // Below this self-reported confidence the asset goes to the fallback folder
+  // instead. A wrong folder hides an asset; the fallback merely delays filing.
+  minConfidence: Number(process.env.GOOGLE_DRIVE_MIN_CONFIDENCE ?? "0.6"),
   tokenUri: process.env.GOOGLE_DRIVE_TOKEN_URI ?? "https://oauth2.googleapis.com/token",
   // `drive.file` is least-privilege: it covers files this app creates, which is
   // all mirroring does. Widen to ".../auth/drive" here (no code change) if the
@@ -185,6 +208,10 @@ export const driveConfig = {
   uploadBaseUrl: (
     process.env.GOOGLE_DRIVE_UPLOAD_BASE_URL ??
     "https://www.googleapis.com/upload/drive/v3"
+  ).replace(/\/+$/, ""),
+  // Non-upload calls (used only by the `check:drive` preflight cleanup).
+  apiBaseUrl: (
+    process.env.GOOGLE_DRIVE_API_BASE_URL ?? "https://www.googleapis.com/drive/v3"
   ).replace(/\/+$/, ""),
 } as const;
 
