@@ -88,9 +88,9 @@ function prompt(subject: RoutingSubject, candidates: DriveFolder[]): string {
 }
 
 /**
- * Pick the destination folder for an asset. Never throws — every failure path
- * degrades to the fallback folder, because the mirror is a backup and must not
- * be able to fail an upload.
+ * Pick the destination folder for an asset. Never throws and never hangs —
+ * every failure path degrades to the fallback folder, because the mirror is a
+ * backup and must not be able to fail or stall an upload.
  */
 export async function chooseDriveFolder(
   subject: RoutingSubject,
@@ -104,6 +104,28 @@ export async function chooseDriveFolder(
 
   if (!driveConfig.routing) return { ...fallback, reason: "routing disabled" };
   if (!geminiConfigured()) return { ...fallback, reason: "no Gemini key" };
+
+  // A cold cache means a full tree walk plus a model call, both on the
+  // uploader's request. Cap the whole thing rather than let a slow Drive or a
+  // hung generation hold the upload open.
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<FolderChoice>((resolve) => {
+    timer = setTimeout(
+      () => resolve({ ...fallback, reason: "routing timed out" }),
+      driveConfig.routingTimeoutMs,
+    );
+  });
+  try {
+    return await Promise.race([route(subject, fallback), timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function route(
+  subject: RoutingSubject,
+  fallback: FolderChoice,
+): Promise<FolderChoice> {
 
   let candidates: DriveFolder[];
   try {

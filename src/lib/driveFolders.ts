@@ -30,9 +30,31 @@ interface FolderTree {
 let cached: FolderTree | null = null;
 let inFlight: Promise<FolderTree> | null = null;
 
+/** Run `task` over `items` with at most `limit` in flight. */
+async function mapLimit<T, R>(
+  items: T[],
+  limit: number,
+  task: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (cursor < items.length) {
+      const index = cursor++;
+      results[index] = await task(items[index]);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
 /**
  * Walk the folder tree under the configured root, breadth-first so the most
  * useful (shallow) folders survive the cap if the tree is enormous.
+ *
+ * Each level is fetched concurrently: this is one Drive round-trip per folder,
+ * and walking a few hundred of them serially took long enough to be felt in
+ * the upload that triggered the refresh.
  */
 async function walkTree(): Promise<FolderTree> {
   const root = driveConfig.rootFolderId || driveConfig.folderId;
@@ -49,18 +71,20 @@ async function walkTree(): Promise<FolderTree> {
       break;
     }
     const next: typeof frontier = [];
-    for (const parent of frontier) {
-      if (folders.length >= driveConfig.maxFolders) {
-        truncated = true;
-        break;
-      }
-      let children;
+    const levels = await mapLimit(frontier, driveConfig.listConcurrency, async (parent) => {
       try {
-        children = await driveListChildFolders(parent.id);
+        return { parent, children: await driveListChildFolders(parent.id) };
       } catch (err) {
         // A folder we can't list is not fatal — it just isn't a candidate.
         console.error(`[drive-folders] listing ${parent.path || root} failed`, err);
-        continue;
+        return { parent, children: [] };
+      }
+    });
+
+    for (const { parent, children } of levels) {
+      if (folders.length >= driveConfig.maxFolders) {
+        truncated = true;
+        break;
       }
       for (const child of children) {
         const path = parent.path ? `${parent.path}/${child.name}` : child.name;
@@ -82,13 +106,11 @@ async function walkTree(): Promise<FolderTree> {
  * The cached folder tree, refetched once its TTL expires. Concurrent callers
  * share one walk — this is dozens of Drive calls, not one.
  */
-export async function driveFolderTree(
-  options: { force?: boolean } = {},
-): Promise<FolderTree> {
+export async function driveFolderTree(): Promise<FolderTree> {
   const fresh =
     cached && Date.now() - cached.fetchedAt < driveConfig.folderCacheMs;
-  if (fresh && !options.force) return cached!;
-  if (inFlight && !options.force) return inFlight;
+  if (fresh) return cached!;
+  if (inFlight) return inFlight;
 
   inFlight = walkTree()
     .then((tree) => {

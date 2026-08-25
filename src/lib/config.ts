@@ -188,6 +188,11 @@ export const driveConfig = {
   // shallow (most useful) folders and drops the deep tail.
   maxFolderDepth: Number(process.env.GOOGLE_DRIVE_MAX_DEPTH ?? "4"),
   maxFolders: Number(process.env.GOOGLE_DRIVE_MAX_FOLDERS ?? "4000"),
+  // Concurrent folder listings while walking the tree.
+  listConcurrency: Number(process.env.GOOGLE_DRIVE_LIST_CONCURRENCY ?? "8"),
+  // Give up on routing after this long and use the fallback folder, so a slow
+  // or hung Drive/Gemini call can never hold up an upload.
+  routingTimeoutMs: Number(process.env.GOOGLE_DRIVE_ROUTING_TIMEOUT_MS ?? "20000"),
   // How long the folder tree is cached in-process.
   folderCacheMs: Number(process.env.GOOGLE_DRIVE_FOLDER_CACHE_MS ?? 30 * 60 * 1000),
   // How many folders the model is asked to choose between.
