@@ -62,11 +62,19 @@ Agents  ──▶ /openapi.json ──▶ discover + call the JSON API above
   link. Mirroring is optional and best-effort: with the env unset, or on any
   Drive error, the upload succeeds unchanged and the row simply has no Drive
   Link, filed into the **existing** folder the asset belongs in — see below.
-  Verify a new setup with **`npm run check:drive`**, which uploads a test
-  file through the app's own `drive.ts`, deletes it again, and prints the
-  folder tree the router will choose from — worth running
-  because the mirror is deliberately quiet, so a misconfigured service account
-  otherwise shows up only as uploads silently missing their Drive Link.
+  It is best-effort but **not silent**: every created-asset response (the
+  201 from an image upload or a whole-video upload) carries a `driveMirror`
+  outcome (`mirrored` with the link and folder, `skipped` when the mirror is
+  not configured, or `failed` with a reason that names the fix), the
+  `/upload` page shows the same, frames filed by the video worker log a
+  non-mirrored outcome per frame, and a deployment with only *some* of the
+  three required `GOOGLE_DRIVE_*` variables set is reported as `failed`
+  rather than treated as off. Verify a new setup with
+  **`npm run check:drive`**, which uploads a test file through the app's own
+  `drive.ts`, deletes it again, and prints the folder tree the router will
+  choose from. The service account needs the full `drive` scope (the
+  default): under `drive.file` it can neither list the library's existing
+  folders nor upload into them.
   Because uploads now have a Drive Link too, `driveLink` alone no longer
   identifies a downscaled preview — `Asset.cdnIsOriginal` does. It is read from
   the **raw** `Uploaded At` property, never from `ManifestEntry.uploaded_at`,

@@ -75,8 +75,12 @@ async function walkTree(): Promise<FolderTree> {
       try {
         return { parent, children: await driveListChildFolders(parent.id) };
       } catch (err) {
-        // A folder we can't list is not fatal — it just isn't a candidate.
-        console.error(`[drive-folders] listing ${parent.path || root} failed`, err);
+        // The root failing means the whole tree is unreadable (bad credentials,
+        // API disabled, folder not shared) — that must surface as an error, not
+        // be cached for the next 30 minutes as "a library with no folders".
+        if (parent.depth === 0) throw err;
+        // A deeper folder we can't list is not fatal — it just isn't a candidate.
+        console.error(`[drive-folders] listing ${parent.path} failed`, err);
         return { parent, children: [] };
       }
     });

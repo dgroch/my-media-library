@@ -11,6 +11,7 @@ import "server-only";
 // the inbox, because nobody goes looking for a file that isn't missing.
 
 import { driveConfig, geminiConfigured } from "./config";
+import { driveConfigured } from "./drive";
 import { driveFolderTree, folderCandidates, type DriveFolder } from "./driveFolders";
 import { callText, extractJsonObject } from "./gemini";
 
@@ -102,6 +103,11 @@ export async function chooseDriveFolder(
     routed: false,
   };
 
+  // Nothing to route into without credentials and a folder. Without this
+  // guard the tree walk ran on every upload of a half-configured deployment,
+  // failing the token exchange each time and logging a Drive error for a
+  // mirror that was never going to be attempted.
+  if (!driveConfigured()) return { ...fallback, reason: "Drive not configured" };
   if (!driveConfig.routing) return { ...fallback, reason: "routing disabled" };
   if (!geminiConfigured()) return { ...fallback, reason: "no Gemini key" };
 

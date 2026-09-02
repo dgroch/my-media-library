@@ -130,6 +130,7 @@ export async function POST(request: Request) {
         manifest: result.manifest,
         cleaned: result.cleaned,
         cleanupRequested: cleanup,
+        driveMirror: result.driveMirror,
       },
       { status: 201 },
     );

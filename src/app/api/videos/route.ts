@@ -107,7 +107,10 @@ export async function POST(request: Request) {
         return NextResponse.json({ deduped: true, asset: result.entry });
       }
       if (result.kind === "created") {
-        return NextResponse.json({ choice, asset: result.entry }, { status: 201 });
+        return NextResponse.json(
+          { choice, asset: result.entry, driveMirror: result.driveMirror },
+          { status: 201 },
+        );
       }
       return errorJson(500, "Unexpected ingest result.");
     }
