@@ -169,7 +169,8 @@ export const uploadConfig = {
 // optional — with these unset, uploads work exactly as before.
 //
 // Auth is a Google service account with write access to the target folder
-// (share the folder with the service account's email). Scope: drive.file.
+// (share the folder with the service account's email). Scope: the full Drive
+// scope — see `scope` below for why the narrower `drive.file` cannot work.
 export const driveConfig = {
   clientEmail: process.env.GOOGLE_DRIVE_CLIENT_EMAIL ?? "",
   // PEM private key. Env vars can't hold newlines, so "\n" escapes are
@@ -201,10 +202,12 @@ export const driveConfig = {
   // instead. A wrong folder hides an asset; the fallback merely delays filing.
   minConfidence: Number(process.env.GOOGLE_DRIVE_MIN_CONFIDENCE ?? "0.6"),
   tokenUri: process.env.GOOGLE_DRIVE_TOKEN_URI ?? "https://oauth2.googleapis.com/token",
-  // `drive.file` is least-privilege: it covers files this app creates, which is
-  // all mirroring does. Widen to ".../auth/drive" here (no code change) if the
-  // service account turns out to need broader access to the target folder.
-  scope: process.env.GOOGLE_DRIVE_SCOPE ?? "https://www.googleapis.com/auth/drive.file",
+  // The full Drive scope, not `drive.file`: `drive.file` only reaches files the
+  // app itself created, so under it the router cannot list the library's
+  // existing folders and an upload into a folder someone else made 404s — i.e.
+  // neither half of the mirror works. The service account still only sees what
+  // is explicitly shared with it, which is the real access boundary here.
+  scope: process.env.GOOGLE_DRIVE_SCOPE ?? "https://www.googleapis.com/auth/drive",
   uploadBaseUrl: (
     process.env.GOOGLE_DRIVE_UPLOAD_BASE_URL ??
     "https://www.googleapis.com/upload/drive/v3"

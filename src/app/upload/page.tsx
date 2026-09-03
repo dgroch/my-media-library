@@ -37,7 +37,27 @@ interface UploadResponse {
   similar?: Array<{ id: string }>;
   cleaned?: boolean;
   cleanupRequested?: boolean;
+  driveMirror?:
+    | { status: "mirrored"; link: string; folder: string; recorded?: boolean }
+    | { status: "skipped" | "failed"; reason: string };
   error?: string;
+}
+
+/**
+ * The Drive half of the upload, as a suffix for the row. Quiet when the mirror
+ * is deliberately off; loud when it should have worked and didn't, because a
+ * mirror that fails silently is indistinguishable from one that is off.
+ */
+function driveSuffix(res: UploadResponse): string {
+  const mirror = res.driveMirror;
+  if (!mirror || mirror.status === "skipped") return "";
+  if (mirror.status === "mirrored") {
+    const where = mirror.folder && mirror.folder !== "(fallback folder)" ? ` (${mirror.folder})` : "";
+    return mirror.recorded === false
+      ? ` · ☁ in Drive${where}, but the link could not be saved on the row`
+      : ` · ☁ mirrored to Drive${where}`;
+  }
+  return ` · ⚠ NOT mirrored to Drive — ${mirror.reason}`;
 }
 
 interface JobResponse {
@@ -71,12 +91,13 @@ function summariseImage(res: UploadResponse): { status: RowStatus; message: stri
       ? " · ✂ chrome removed"
       : " · ⚠ chrome NOT removed (Gemini edit unavailable)"
     : "";
+  const drive = driveSuffix(res);
   if (res.manifested && desc) {
     const summary = desc.length > 140 ? `${desc.slice(0, 140)}…` : desc;
     const extra = tags ? ` · ${tags} tags` : "";
-    return { status: "done", message: `${summary}${extra}${sim}${clean}` };
+    return { status: "done", message: `${summary}${extra}${sim}${clean}${drive}` };
   }
-  return { status: "done", message: `Stored — no AI enrichment${sim}${clean}.` };
+  return { status: "done", message: `Stored — no AI enrichment${sim}${clean}${drive}.` };
 }
 
 function Uploader() {
@@ -170,7 +191,7 @@ function Uploader() {
           status: data.deduped ? "dedup" : "done",
           message: data.deduped
             ? "Already in library — context merged."
-            : "Video stored.",
+            : `Video stored${driveSuffix(data)}.`,
         });
         return;
       }

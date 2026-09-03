@@ -902,9 +902,45 @@ export async function GET(request: Request) {
                     "Near-duplicates found at upload (advisory — offer \"use the existing one instead?\").",
                   items: { $ref: "#/components/schemas/SimilarAsset" },
                 },
+                driveMirror: { $ref: "#/components/schemas/DriveMirrorOutcome" },
               },
             },
           ],
+        },
+        DriveMirrorOutcome: {
+          type: "object",
+          description:
+            "Whether the uploaded original was also copied to Google Drive. The CDN " +
+            "object at `url` is the canonical original either way; the Drive copy is a " +
+            "backup filed into the existing library. `skipped` means the mirror is not " +
+            "configured on this deployment (by design); `failed` means it is configured " +
+            "and something is wrong — `reason` names the fix, and the asset is safe on the CDN.",
+          required: ["status"],
+          properties: {
+            status: {
+              type: "string",
+              enum: ["mirrored", "skipped", "failed"],
+            },
+            link: {
+              type: "string",
+              description: "Drive view link (status=mirrored). Also written to `driveLink` on the row.",
+            },
+            fileId: { type: "string", description: "Drive file id (status=mirrored)." },
+            folder: {
+              type: "string",
+              description:
+                "Path of the Drive folder the file was filed into, relative to the library root, or \"(fallback folder)\".",
+            },
+            recorded: {
+              type: "boolean",
+              description:
+                "status=mirrored only: false when the file reached Drive but the Notion row could not be updated with its link.",
+            },
+            reason: {
+              type: "string",
+              description: "Why the file was not mirrored (status=skipped or failed).",
+            },
+          },
         },
         DerivedObject: {
           type: "object",

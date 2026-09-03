@@ -10,7 +10,12 @@
 // folder and deletes it again.
 
 import { driveConfig } from "../src/lib/config";
-import { driveConfigured, driveUploadFile } from "../src/lib/drive";
+import {
+  driveConfigured,
+  driveMirrorState,
+  driveUploadFile,
+  explainDriveError,
+} from "../src/lib/drive";
 
 const RESET = "\x1b[0m";
 const red = (s: string) => `\x1b[31m${s}${RESET}`;
@@ -25,16 +30,32 @@ function fail(message: string, hint?: string): never {
 
 // --- 1. Env ---------------------------------------------------------------
 
-const missing = [
-  ["GOOGLE_DRIVE_CLIENT_EMAIL", driveConfig.clientEmail],
-  ["GOOGLE_DRIVE_PRIVATE_KEY", driveConfig.privateKey],
-  ["GOOGLE_DRIVE_FOLDER_ID", driveConfig.folderId],
-].filter(([, value]) => !value);
-
-if (missing.length > 0 || !driveConfigured()) {
+const state = driveMirrorState();
+if (state.kind === "off") {
   fail(
-    `Not configured — missing: ${missing.map(([name]) => name).join(", ")}`,
+    "Not configured — GOOGLE_DRIVE_CLIENT_EMAIL, GOOGLE_DRIVE_PRIVATE_KEY and GOOGLE_DRIVE_FOLDER_ID are all unset.",
     "With these unset the mirror is simply off; uploads still work, they just get no Drive Link.",
+  );
+}
+if (state.kind === "misconfigured" || !driveConfigured()) {
+  const missing = state.kind === "misconfigured" ? state.missing.join(", ") : "(unknown)";
+  fail(
+    `Half-configured — missing: ${missing}`,
+    "Uploads succeed and none reach Drive; the only sign is driveMirror.status = \"failed\" on each response. Set the missing variable(s) on the deployment.",
+  );
+}
+// The example file's placeholder, and the "your-project" variant that ended up
+// on a real deployment once. Either authenticates as nobody.
+if (/@(my|your)-project\.iam\.gserviceaccount\.com$/i.test(driveConfig.clientEmail)) {
+  fail(
+    `GOOGLE_DRIVE_CLIENT_EMAIL is a placeholder (${driveConfig.clientEmail}).`,
+    "Paste the real `client_email` from the service account's JSON key file.",
+  );
+}
+if (!/\.iam\.gserviceaccount\.com$/i.test(driveConfig.clientEmail)) {
+  fail(
+    `GOOGLE_DRIVE_CLIENT_EMAIL does not look like a service account (${driveConfig.clientEmail}).`,
+    "It should end in .iam.gserviceaccount.com — a person's Google address cannot sign a service-account JWT.",
   );
 }
 
@@ -70,21 +91,12 @@ try {
     bytes: Buffer.from("Asset library Drive mirror preflight. Safe to delete.\n"),
   });
 } catch (err) {
-  const message = err instanceof Error ? err.message : String(err);
-  if (message.includes("invalid_grant")) {
-    fail(message, "The service account or its key is wrong — check client_email and private_key came from the same JSON key file.");
-  }
-  if (message.includes("(403)")) {
-    fail(
-      message,
-      `Authenticated, but not allowed to write there. Share the folder with ${driveConfig.clientEmail} as Editor, ` +
-        "and if it is on a Shared Drive that still fails, widen GOOGLE_DRIVE_SCOPE to https://www.googleapis.com/auth/drive.",
-    );
-  }
-  if (message.includes("(404)")) {
-    fail(message, "GOOGLE_DRIVE_FOLDER_ID does not resolve — use the last path segment of the folder's Drive URL.");
-  }
-  fail(message);
+  // Same diagnosis the mirror itself logs and returns to uploaders, so what
+  // this prints is exactly what a failing upload would say.
+  const explained = explainDriveError(err);
+  const raw = err instanceof Error ? err.message : String(err);
+  const hint = explained.startsWith(raw) ? explained.slice(raw.length).replace(/^\s*—\s*/, "") : "";
+  fail(raw, hint || undefined);
 }
 
 console.log(`${green("✓")} uploaded — ${file.webViewLink}`);
@@ -109,7 +121,18 @@ if (!driveConfig.routing) {
 } else {
   console.log(dim("\n→ reading the folder tree …"));
   const { driveFolderTree, folderCandidates } = await import("../src/lib/driveFolders");
-  const tree = await driveFolderTree();
+  let tree;
+  try {
+    tree = await driveFolderTree();
+  } catch (err) {
+    // The fallback folder was writable (step 2 passed) but the routing root
+    // isn't readable — usually a GOOGLE_DRIVE_ROOT_FOLDER_ID that was never
+    // shared with the account. The mirror would still work, unrouted.
+    fail(
+      explainDriveError(err),
+      `GOOGLE_DRIVE_ROOT_FOLDER_ID (${driveConfig.rootFolderId || driveConfig.folderId}) must also be shared with ${driveConfig.clientEmail}; until it is, every upload lands in the fallback folder.`,
+    );
+  }
 
   if (tree.folders.length === 0) {
     console.warn(

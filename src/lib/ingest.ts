@@ -26,7 +26,7 @@ import {
 } from "./assets";
 import { geminiConfigured, uploadConfig } from "./config";
 import { removeOverlays } from "./cleanup";
-import { mirrorToDrive } from "./drive";
+import { mirrorToDrive, type DriveMirrorOutcome } from "./drive";
 import { chooseDriveFolder, type RoutingSubject } from "./driveRouting";
 import { embedQuery } from "./embeddings";
 import { manifestImage, type AssetManifest } from "./gemini";
@@ -54,6 +54,8 @@ export type IngestResult =
       manifest: AssetManifest | null;
       /** True when generative overlay removal actually changed the image. */
       cleaned: boolean;
+      /** Whether the original also made it to Google Drive, and if not, why. */
+      driveMirror: DriveMirrorOutcome;
     }
   | {
       kind: "deduped";
@@ -206,14 +208,15 @@ export async function ingestImage(params: IngestParams): Promise<IngestResult> {
   // manifesting, because the folder router files on what the asset actually
   // depicts — so it needs the description and tags Gemini just produced.
   // Best-effort throughout: the CDN object is already the original, so a Drive
-  // failure costs a backup, not the asset.
-  entry =
-    (await mirrorEntry(entry, {
-      bytes: image,
-      mimeType: storedMime,
-      slug,
-      manifest,
-    })) ?? entry;
+  // failure costs a backup, not the asset — but the outcome is returned to the
+  // uploader, so a broken mirror is never silent.
+  const mirror = await mirrorEntry(entry, {
+    bytes: image,
+    mimeType: storedMime,
+    slug,
+    manifest,
+  });
+  entry = mirror.entry ?? entry;
 
   const status = await indexEntry(entry);
   return {
@@ -223,13 +226,14 @@ export async function ingestImage(params: IngestParams): Promise<IngestResult> {
     manifested: Boolean(manifest),
     manifest,
     cleaned,
+    driveMirror: mirror.outcome,
   };
 }
 
 /**
  * Route an asset to a Drive folder, upload it there, and record the result on
- * the row. Returns the refreshed entry, or null when nothing was written —
- * every failure inside is swallowed, since this is a backup step.
+ * the row. `entry` is the refreshed row when the link was recorded, else null;
+ * every failure inside is swallowed into `outcome`, since this is a backup step.
  */
 async function mirrorEntry(
   entry: ManifestEntry,
@@ -239,7 +243,7 @@ async function mirrorEntry(
     slug: string;
     manifest: AssetManifest | null;
   },
-): Promise<ManifestEntry | null> {
+): Promise<{ entry: ManifestEntry | null; outcome: DriveMirrorOutcome }> {
   const subject: RoutingSubject = {
     filename: file.slug,
     mediaType: entry.mediaType,
@@ -259,24 +263,37 @@ async function mirrorEntry(
   try {
     destination = await chooseDriveFolder(subject);
   } catch (err) {
-    console.error("[drive-mirror] routing failed", err);
-    return null;
+    const reason = `routing failed: ${err instanceof Error ? err.message : String(err)}`;
+    console.error(`[drive-mirror] ${reason}`);
+    return { entry: null, outcome: { status: "failed", reason } };
   }
 
-  const drive = await mirrorToDrive({
+  const { file: drive, outcome } = await mirrorToDrive({
     name: file.slug,
     mimeType: file.mimeType,
     bytes: file.bytes,
     parentId: destination.id,
     parentPath: destination.path,
   });
-  if (!drive) return null;
+  if (!drive || outcome.status !== "mirrored") return { entry: null, outcome };
 
+  // The file IS in Drive from here on; only the row can still miss its link.
+  // Say so (`recorded: false`) rather than reporting a failure that would
+  // prompt someone to upload it again.
   try {
-    return await writeDriveMirror(entry.id, drive);
+    const updated = await writeDriveMirror(entry.id, drive);
+    if (!updated) {
+      // writeDriveMirror returns null, not an error, when the Manifest has no
+      // `Drive Link` / `Drive File ID` properties to write to.
+      console.error(
+        "[drive-mirror] the Manifest has no Drive Link / Drive File ID properties — link not recorded",
+      );
+      return { entry: null, outcome: { ...outcome, recorded: false } };
+    }
+    return { entry: updated, outcome };
   } catch (err) {
     console.error("[drive-mirror] recording the Drive link failed", err);
-    return null;
+    return { entry: null, outcome: { ...outcome, recorded: false } };
   }
 }
 
@@ -334,13 +351,13 @@ export async function ingestVideoFile(params: {
 
   // Videos have no Gemini manifest, so the router files them on the human
   // channel alone (context, product, tags).
-  entry =
-    (await mirrorEntry(entry, {
-      bytes: params.bytes,
-      mimeType: params.storedMime,
-      slug,
-      manifest: null,
-    })) ?? entry;
+  const mirror = await mirrorEntry(entry, {
+    bytes: params.bytes,
+    mimeType: params.storedMime,
+    slug,
+    manifest: null,
+  });
+  entry = mirror.entry ?? entry;
 
   const status = await indexEntry(entry);
   return {
@@ -350,6 +367,7 @@ export async function ingestVideoFile(params: {
     manifested: false,
     manifest: null,
     cleaned: false,
+    driveMirror: mirror.outcome,
   };
 }
 

@@ -115,6 +115,11 @@ async function runFrameJob(job: VideoJob): Promise<void> {
         metadata: job.metadata,
         onSimilar: job.onSimilar,
       });
+      // The worker has no caller to hand the mirror outcome to, so a frame
+      // that did not reach Drive is at least loud in the worker log.
+      if (result.kind === "created" && result.driveMirror.status === "failed") {
+        console.error(`${tag} scene ${i + 1} not mirrored to Drive — ${result.driveMirror.reason}`);
+      }
       if (result.kind === "created" || result.kind === "deduped") {
         filed.push({
           assetId: result.entry.id,

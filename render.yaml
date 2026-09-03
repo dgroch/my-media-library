@@ -60,6 +60,26 @@ services:
         sync: false
       - key: R2_BUCKET
         sync: false
+      # Google Drive mirror: every uploaded original is also filed into the
+      # existing Drive library (see .env.local.example for setup). ALL THREE
+      # of email / key / folder must be set for the mirror to be on; with only
+      # some of them set, uploads still succeed but none reach Drive, and each
+      # response reports driveMirror.status = "failed" naming the missing
+      # variable. Verify with `npm run check:drive`.
+      - key: GOOGLE_DRIVE_CLIENT_EMAIL
+        sync: false
+      - key: GOOGLE_DRIVE_PRIVATE_KEY
+        sync: false
+      # Fallback (inbox-style) folder for assets the router cannot place.
+      - key: GOOGLE_DRIVE_FOLDER_ID
+        sync: false
+      # Root of the folder tree to file into (a Shared Drive id works). Defaults
+      # to GOOGLE_DRIVE_FOLDER_ID.
+      - key: GOOGLE_DRIVE_ROOT_FOLDER_ID
+        sync: false
+      # Gemini also drives folder routing for the mirror (same key as below).
+      - key: GEMINI_API_KEY
+        sync: false
 
   # Re-index job: rebuilds the semantic search index and uploads it to R2 on a
   # schedule, fully independent of app deploys. Runs build:index (which now
@@ -129,6 +149,16 @@ services:
       - key: ASSET_CDN_BASE_URL
         sync: false
       - key: ASSET_STORAGE_PREFIX
+        sync: false
+      # Drive mirror — frames are ingested through the same path as uploads,
+      # so the worker needs the same GOOGLE_DRIVE_* values as the web service.
+      - key: GOOGLE_DRIVE_CLIENT_EMAIL
+        sync: false
+      - key: GOOGLE_DRIVE_PRIVATE_KEY
+        sync: false
+      - key: GOOGLE_DRIVE_FOLDER_ID
+        sync: false
+      - key: GOOGLE_DRIVE_ROOT_FOLDER_ID
         sync: false
       # Brand R2 (read/WRITE) — stores the cleaned frames. Same as the web
       # service's asset upload creds.
