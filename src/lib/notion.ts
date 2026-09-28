@@ -644,15 +644,18 @@ export async function getCollection(id: string): Promise<Collection | null> {
   // A smart collection re-evaluates its rule against the current Manifest, so
   // its membership tracks new and edited assets without anyone re-saving it.
   if (kind === "smart" && criteria) {
+    // The summary is rendered from the same helper that fills the Rule Summary
+    // property, so the UI and Notion never disagree about the wording.
+    const summary = describeCriteria(criteria);
     try {
       const { items, truncated } = await resolveSmartCollection(id, criteria);
-      return { id, name, items, kind, criteria, truncated };
+      return { id, name, items, kind, criteria, summary, truncated };
     } catch (err) {
       // A rule we can no longer compile (e.g. a property was renamed in Notion)
       // should degrade to an empty view with the reason logged, not take down
       // the whole collections page.
       console.error(`smart collection ${id} failed to evaluate`, err);
-      return { id, name, items: [], kind, criteria, truncated: false };
+      return { id, name, items: [], kind, criteria, summary, truncated: false };
     }
   }
 
@@ -667,5 +670,5 @@ export async function getCollection(id: string): Promise<Collection | null> {
     .filter((r): r is PromiseFulfilledResult<any> => r.status === "fulfilled")
     .map((r) => pageToAsset(r.value));
 
-  return { id, name, items, kind, criteria, truncated: false };
+  return { id, name, items, kind, criteria, summary: "", truncated: false };
 }

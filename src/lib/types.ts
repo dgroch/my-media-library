@@ -62,6 +62,12 @@ export interface Collection {
   /** The rule, for smart collections only. */
   criteria: CollectionCriteria | null;
   /**
+   * Human-readable rendering of `criteria` (e.g. `Tags has all of "a", "b"`).
+   * Computed server-side so the client never needs the property-name config,
+   * and so it matches what Notion shows in `Rule Summary`.
+   */
+  summary: string;
+  /**
    * True when a smart rule matched more assets than the per-view cap, so
    * `items` is a prefix rather than the whole set.
    */

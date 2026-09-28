@@ -325,18 +325,11 @@ export default function CollectionsBrowser({
                       {detail.items.length === 1 ? "asset" : "assets"}
                       {detail.kind === "smart" && " · updates automatically"}
                     </p>
-                    {detail.kind === "smart" && detail.criteria && (
+                    {detail.kind === "smart" && detail.summary && (
                       <p className="rule-summary">
-                        Match {detail.criteria.connector === "or" ? "any" : "all"}
-                        :{" "}
-                        {detail.criteria.rules
-                          .map(
-                            (r) =>
-                              `${r.field} ${r.op} ${
-                                r.values.length ? r.values.join(", ") : ""
-                              }`.trim(),
-                          )
-                          .join(detail.criteria.connector === "or" ? " OR " : " AND ")}
+                        Match{" "}
+                        {detail.criteria?.connector === "or" ? "any" : "all"}:{" "}
+                        {detail.summary}
                       </p>
                     )}
                     {detail.truncated && (
