@@ -474,9 +474,10 @@ export async function GET(request: Request) {
           operationId: "createCollection",
           summary: "Create a shareable collection",
           description:
-            "Creates a collection from a set of asset ids and returns its id. The " +
-            "share URL is `/c/{id}`. Requires `Authorization: Bearer <token>` only " +
-            "when the deployment sets API_WRITE_TOKEN.",
+            "Creates a collection and returns its id. Send either `assetIds` (a " +
+            "fixed, hand-picked collection) or `criteria` (a smart collection that " +
+            "re-runs its rule on every read). The share URL is `/c/{id}`. Requires " +
+            "`Authorization: Bearer <token>` only when the deployment sets API_WRITE_TOKEN.",
           security: [{ bearerAuth: [] }, {}],
           requestBody: {
             required: true,
@@ -484,7 +485,6 @@ export async function GET(request: Request) {
               "application/json": {
                 schema: {
                   type: "object",
-                  required: ["assetIds"],
                   properties: {
                     name: {
                       type: "string",
@@ -496,7 +496,11 @@ export async function GET(request: Request) {
                       items: { type: "string" },
                       description:
                         "Notion page ids of the assets to include (the `id` field " +
-                        "from search results).",
+                        "from search results). Required unless `criteria` is sent.",
+                    },
+                    criteria: {
+                      $ref: "#/components/schemas/CollectionCriteria",
+                      description: "Makes this a smart collection. `assetIds` is then ignored.",
                     },
                   },
                 },
@@ -522,7 +526,7 @@ export async function GET(request: Request) {
               },
             },
             "400": {
-              description: "Invalid body or no assets selected.",
+              description: "Invalid body, no assets selected, or an invalid rule (see `problems`).",
               content: {
                 "application/json": {
                   schema: { $ref: "#/components/schemas/Error" },
@@ -542,6 +546,106 @@ export async function GET(request: Request) {
               content: {
                 "application/json": {
                   schema: { $ref: "#/components/schemas/Error" },
+                },
+              },
+            },
+          },
+        },
+      },
+      "/api/collections/meta": {
+        get: {
+          operationId: "getCollectionRuleFields",
+          summary: "Fields, operators and options for smart-collection rules",
+          description:
+            "Everything needed to build a valid rule: the filterable fields, the " +
+            "operators each accepts, and the existing Tags, Source and Rights options.",
+          responses: {
+            "200": {
+              description: "Rule vocabulary.",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    required: ["fields", "ops"],
+                    properties: {
+                      fields: {
+                        type: "array",
+                        items: {
+                          type: "object",
+                          required: ["key", "label", "type", "ops", "options"],
+                          properties: {
+                            key: { type: "string" },
+                            label: { type: "string" },
+                            type: { type: "string", enum: ["multi_select", "select", "rich_text"] },
+                            ops: { type: "array", items: { type: "string" } },
+                            options: {
+                              type: ["array", "null"],
+                              items: { type: "string" },
+                              description: "Allowed values; null for free-text fields.",
+                            },
+                          },
+                        },
+                      },
+                      ops: {
+                        type: "object",
+                        additionalProperties: {
+                          type: "object",
+                          properties: {
+                            label: { type: "string" },
+                            arity: { type: "string", enum: ["none", "one", "many"] },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      "/api/collections/preview": {
+        post: {
+          operationId: "previewCollectionRule",
+          summary: "Count the assets a rule currently matches",
+          description:
+            "Dry-runs a rule without saving it. An invalid rule returns 200 with " +
+            "`problems`, since that is a normal state while a rule is being edited. " +
+            "Counts are capped (default 500); `truncated` means \"at least this many\".",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/CollectionCriteria" },
+              },
+            },
+          },
+          responses: {
+            "200": {
+              description: "Match count, or the rule's problems.",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    required: ["count", "truncated", "problems"],
+                    properties: {
+                      count: { type: "integer" },
+                      truncated: { type: "boolean" },
+                      problems: {
+                        type: "array",
+                        items: {
+                          type: "object",
+                          properties: {
+                            ruleIndex: {
+                              type: "integer",
+                              description: "Index into `rules`, or -1 for the whole rule.",
+                            },
+                            message: { type: "string" },
+                          },
+                        },
+                      },
+                    },
+                  },
                 },
               },
             },
@@ -581,10 +685,11 @@ export async function GET(request: Request) {
         },
         patch: {
           operationId: "renameCollection",
-          summary: "Rename a collection",
+          summary: "Rename a collection, or replace a smart collection's rule",
           description:
-            "Updates a collection's name. Requires `Authorization: Bearer " +
-            "<token>` only when the deployment sets API_WRITE_TOKEN.",
+            "Updates a collection's name, or (with `criteria`) a smart collection's " +
+            "rule. Sending `criteria` to a hand-picked collection returns 409. " +
+            "Requires `Authorization: Bearer <token>` only when the deployment sets API_WRITE_TOKEN.",
           security: [{ bearerAuth: [] }, {}],
           parameters: [
             {
@@ -600,11 +705,14 @@ export async function GET(request: Request) {
               "application/json": {
                 schema: {
                   type: "object",
-                  required: ["name"],
                   properties: {
                     name: {
                       type: "string",
-                      description: "The new collection name (non-empty).",
+                      description: "The new collection name. Required unless `criteria` is sent.",
+                    },
+                    criteria: {
+                      $ref: "#/components/schemas/CollectionCriteria",
+                      description: "The replacement rule (smart collections only).",
                     },
                   },
                 },
@@ -613,22 +721,31 @@ export async function GET(request: Request) {
           },
           responses: {
             "200": {
-              description: "Collection renamed.",
+              description: "Collection renamed, or rule replaced.",
               content: {
                 "application/json": {
                   schema: {
                     type: "object",
-                    required: ["id", "name"],
+                    required: ["id"],
                     properties: {
                       id: { type: "string" },
                       name: { type: "string" },
+                      criteria: { $ref: "#/components/schemas/CollectionCriteria" },
                     },
                   },
                 },
               },
             },
+            "409": {
+              description: "`criteria` sent to a hand-picked collection.",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/Error" },
+                },
+              },
+            },
             "400": {
-              description: "Empty or invalid name.",
+              description: "Empty or invalid name, or an invalid rule (see `problems`).",
               content: {
                 "application/json": {
                   schema: { $ref: "#/components/schemas/Error" },
@@ -765,7 +882,7 @@ export async function GET(request: Request) {
         },
         Collection: {
           type: "object",
-          required: ["id", "name", "items"],
+          required: ["id", "name", "items", "kind", "criteria", "summary", "truncated", "evaluationError"],
           properties: {
             id: { type: "string" },
             name: { type: "string" },
@@ -773,15 +890,83 @@ export async function GET(request: Request) {
               type: "array",
               items: { $ref: "#/components/schemas/Asset" },
             },
+            kind: {
+              type: "string",
+              enum: ["manual", "smart"],
+              description:
+                "`manual` holds a fixed list of assets; `smart` re-runs its rule " +
+                "against the Manifest on every read.",
+            },
+            criteria: {
+              oneOf: [{ $ref: "#/components/schemas/CollectionCriteria" }, { type: "null" }],
+              description: "The rule, for smart collections only.",
+            },
+            summary: {
+              type: "string",
+              description: "Human-readable rule, e.g. `Tags has all of \"a\", \"b\"`. Empty for manual collections.",
+            },
+            truncated: {
+              type: "boolean",
+              description: "True when a smart rule matched more than the per-view cap (default 500), so `items` is a prefix.",
+            },
+            evaluationError: {
+              type: ["string", "null"],
+              description: "Why a smart rule could not be run (e.g. a tag was renamed in Notion). Null when it ran.",
+            },
+          },
+        },
+        CollectionCriteria: {
+          type: "object",
+          required: ["connector", "rules"],
+          properties: {
+            v: { type: "integer", enum: [1], description: "Schema version." },
+            connector: {
+              type: "string",
+              enum: ["and", "or"],
+              description: "Whether every rule must match (`and`) or any rule (`or`).",
+            },
+            rules: {
+              type: "array",
+              minItems: 1,
+              items: { $ref: "#/components/schemas/CriteriaRule" },
+            },
+          },
+        },
+        CriteriaRule: {
+          type: "object",
+          required: ["field", "op", "values"],
+          properties: {
+            field: {
+              type: "string",
+              enum: ["tags", "source", "rights", "context", "people", "product", "location", "shoot", "credit", "rightsNotes"],
+            },
+            op: {
+              type: "string",
+              enum: ["hasAll", "hasAny", "hasNone", "is", "isNot", "contains", "equals", "notContains", "startsWith", "endsWith", "isEmpty", "isNotEmpty"],
+              description:
+                "Valid operators depend on the field; `GET /api/collections/meta` lists them. " +
+                "`equals` on text fields ignores case.",
+            },
+            values: {
+              type: "array",
+              items: { type: "string" },
+              description:
+                "Operands. `isEmpty`/`isNotEmpty` take none; text operators take exactly one. " +
+                "Tags, Source and Rights values must be existing options.",
+            },
           },
         },
         CollectionSummary: {
           type: "object",
-          required: ["id", "name", "assetCount", "partialCount", "createdTime"],
+          required: ["id", "name", "kind", "assetCount", "partialCount", "createdTime"],
           properties: {
             id: { type: "string" },
             name: { type: "string" },
-            assetCount: { type: "integer" },
+            kind: { type: "string", enum: ["manual", "smart"] },
+            assetCount: {
+              type: "integer",
+              description: "Linked assets. Not meaningful for smart collections, whose members are only known by running the rule.",
+            },
             partialCount: {
               type: "boolean",
               description: "True when the real count exceeds assetCount.",

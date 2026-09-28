@@ -332,6 +332,15 @@ export default function CollectionsBrowser({
                         {detail.summary}
                       </p>
                     )}
+                    {detail.evaluationError && (
+                      <div className="notice error">
+                        This rule could not be run, so nothing is shown. A tag
+                        or option it uses may have been renamed or removed in
+                        Notion. Edit the rule to fix it.
+                        <br />
+                        <span className="muted">{detail.evaluationError}</span>
+                      </div>
+                    )}
                     {detail.truncated && (
                       <div className="notice">
                         Showing the first {detail.items.length} matches — this

@@ -72,6 +72,11 @@ export interface Collection {
    * `items` is a prefix rather than the whole set.
    */
   truncated: boolean;
+  /**
+   * Why a smart rule could not be evaluated (e.g. a tag was renamed or deleted
+   * in Notion), so the UI can explain an empty view. Null when it evaluated.
+   */
+  evaluationError: string | null;
 }
 
 /** Lightweight collection metadata for list/index views (no asset rows). */

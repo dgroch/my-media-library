@@ -324,6 +324,17 @@ main {
   .collection-list {
     max-height: 320px;
   }
+
+  /* Stack the title above the actions so a long name keeps its width
+     instead of being squeezed to one character per line. */
+  .browser-main-head {
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .head-actions {
+    flex-shrink: 1;
+  }
 }
 
 /* ---- Masonry ------------------------------------------------------------ */

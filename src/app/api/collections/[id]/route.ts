@@ -1,12 +1,14 @@
 import { NextResponse } from "next/server";
 
 import { checkWriteAuth } from "@/lib/auth";
-import { normaliseCriteria, validateCriteria } from "@/lib/collectionCriteria";
+import { normaliseCriteria } from "@/lib/collectionCriteria";
 import {
   deleteCollection,
   getCollection,
+  NotSmartCollectionError,
   renameCollection,
   updateCollectionCriteria,
+  validateCriteriaAgainstSchema,
 } from "@/lib/notion";
 
 export const dynamic = "force-dynamic";
@@ -57,7 +59,15 @@ export async function PATCH(
   // Editing a rule: validate before writing so a bad rule never reaches Notion.
   if (body.criteria != null) {
     const criteria = normaliseCriteria(body.criteria as any);
-    const problems = validateCriteria(criteria);
+    let problems: Awaited<ReturnType<typeof validateCriteriaAgainstSchema>>;
+    try {
+      problems = await validateCriteriaAgainstSchema(criteria);
+    } catch (err) {
+      console.error("collection criteria validation failed", err);
+      const message =
+        err instanceof Error ? err.message : "Could not check the rule against Notion";
+      return NextResponse.json({ error: message }, { status: 502 });
+    }
     if (problems.length > 0) {
       return NextResponse.json(
         {
@@ -79,6 +89,9 @@ export async function PATCH(
       await updateCollectionCriteria(id, criteria, name || undefined);
       return NextResponse.json({ id, criteria });
     } catch (err) {
+      if (err instanceof NotSmartCollectionError) {
+        return NextResponse.json({ error: err.message }, { status: 409 });
+      }
       console.error("update collection criteria failed", err);
       const message =
         err instanceof Error ? err.message : "Failed to update criteria";

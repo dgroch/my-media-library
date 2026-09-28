@@ -106,6 +106,13 @@ Agents  ──▶ /openapi.json ──▶ discover + call the JSON API above
   database, each with a relation to the selected Manifest rows. The Notion page
   id of that row _is_ the share URL, so it's a single source of truth you can
   also browse inside Notion.
+- A **smart collection** stores a rule instead of a list (e.g. every asset
+  tagged `high-floral` + `launch-event`) as JSON in the row's `Criteria`
+  property, and re-runs it against the Manifest on every view, so new assets
+  appear without anyone re-saving it. Tags, Source and Rights values are
+  checked against the Manifest's real options when a rule is saved. One view
+  resolves at most `SMART_COLLECTION_MAX` assets (default 500) and is cached
+  for `SMART_COLLECTION_CACHE_MS` (default 60s).
 
 ## API
 
@@ -122,8 +129,11 @@ without hand-written schemas.
 | `/api/assets/{id}`       | PATCH  | `{ context?, people?, … }`         | the updated manifest entry           | bearer² |
 | `/api/derived/{ns}/{name}` | PUT  | raw bytes                          | `{ key, url?, existed }`             | bearer² |
 | `/api/collections`       | GET    | —                                  | `{ collections: CollectionSummary[] }` | none |
-| `/api/collections`       | POST   | `{ name?, assetIds: string[] }`    | `{ id }` (share at `/c/{id}`)        | optional¹ |
-| `/api/collections/{id}`  | GET    | —                                  | `{ id, name, items: Asset[] }`       | none |
+| `/api/collections`       | POST   | `{ name?, assetIds: string[] }` or `{ name?, criteria }` | `{ id }` (share at `/c/{id}`) | optional¹ |
+| `/api/collections/{id}`  | GET    | —                                  | `{ id, name, items: Asset[], kind, criteria, summary, truncated, evaluationError }` | none |
+| `/api/collections/{id}`  | PATCH  | `{ name }` or `{ criteria, name? }` | `{ id, … }` (`409` for `criteria` on a manual collection) | optional¹ |
+| `/api/collections/meta`  | GET    | —                                  | rule fields, operators and options   | none |
+| `/api/collections/preview` | POST | `{ connector, rules }`             | `{ count, truncated, problems }`     | none |
 | `/c/{id}`                | GET    | —                                  | server-rendered HTML share page      | none |
 | `/openapi.json`          | GET    | —                                  | the OpenAPI 3.1 description          | none |
 
@@ -334,6 +344,17 @@ writes `NOTION_COLLECTIONS_DATABASE_ID` / `NOTION_COLLECTIONS_DATA_SOURCE_ID`
 back into `.env.local`. Because it's created under a page your integration can
 already see, it inherits access automatically.
 
+To enable smart (rule-based) collections, add their properties (`Type`,
+`Criteria`, `Rule Summary`) to that database:
+
+```bash
+npm run setup:smart-collections -- --dry-run   # show the plan only
+npm run setup:smart-collections
+```
+
+Idempotent and additive: existing rows keep an empty `Type`, which reads as a
+hand-picked collection.
+
 ### 4. Enable the upload path (optional)
 
 ```bash
@@ -397,6 +418,8 @@ All configurable via environment variables (see `.env.local.example`):
 | `NOTION_COLLECTIONS_PARENT_PAGE_ID` | Where the Collections DB is created            |
 | `OPENAI_API_KEY`                  | Embeddings key (build-time + query-time secret)  |
 | `API_WRITE_TOKEN`                 | Optional; when set, requires a bearer token on `POST /api/collections` |
+| `SMART_COLLECTION_MAX`            | Optional; most assets one smart collection resolves per view (default `500`) |
+| `SMART_COLLECTION_CACHE_MS`       | Optional; how long a resolved smart collection is reused (default `60000`) |
 | `ASSET_LIBRARY_TOKEN`             | Bearer token for `POST /api/assets` / `PATCH /api/assets/{id}`; uploads stay disabled until set |
 | `ASSET_CDN_BASE_URL`              | Public CDN base URL for uploaded originals (required for uploads) |
 | `ASSET_STORAGE_PREFIX`            | R2 key prefix for uploads (default `figandbloom/asset-manifest/`) |

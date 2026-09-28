@@ -18,7 +18,10 @@ import {
   compileCriteria,
   describeCriteria,
   parseCriteria,
+  toRichTextSegments,
+  validateCriteria,
   type CollectionCriteria,
+  type CriteriaProblem,
 } from "./collectionCriteria";
 import { detectMediaType } from "./media";
 import type {
@@ -194,10 +197,25 @@ export interface ManifestVocabulary {
   rights: string[];
 }
 
-let cachedVocabulary: ManifestVocabulary | null = null;
+let cachedVocabulary: { at: number; value: ManifestVocabulary } | null = null;
 
-export async function manifestVocabulary(): Promise<ManifestVocabulary> {
-  if (cachedVocabulary) return cachedVocabulary;
+/**
+ * How long the option vocabulary is reused. Short enough that a tag added in
+ * Notion shows up in the builder soon; `validateCriteriaAgainstSchema` also
+ * forces a refresh before rejecting a value, so validation never lags.
+ */
+const VOCABULARY_CACHE_MS = 5 * 60_000;
+
+export async function manifestVocabulary(
+  { fresh = false }: { fresh?: boolean } = {},
+): Promise<ManifestVocabulary> {
+  if (
+    !fresh &&
+    cachedVocabulary &&
+    Date.now() - cachedVocabulary.at < VOCABULARY_CACHE_MS
+  ) {
+    return cachedVocabulary.value;
+  }
 
   const dataSourceId = await assetsDataSourceId();
   const ds = (await notionRetry("manifest vocabulary retrieve", () =>
@@ -216,7 +234,7 @@ export async function manifestVocabulary(): Promise<ManifestVocabulary> {
       .filter((n): n is string => Boolean(n));
   };
 
-  cachedVocabulary = {
+  const value: ManifestVocabulary = {
     // Sorted so the picker is browsable rather than schema-insertion order.
     tags: optionsFor(humanProps.tags, "multi_select").sort((a, b) =>
       a.localeCompare(b),
@@ -224,7 +242,30 @@ export async function manifestVocabulary(): Promise<ManifestVocabulary> {
     source: optionsFor(humanProps.source, "select"),
     rights: optionsFor(humanProps.rights, "select"),
   };
-  return cachedVocabulary;
+  cachedVocabulary = { at: Date.now(), value };
+  return value;
+}
+
+/**
+ * Validate a rule against the live Manifest schema, so a select/multi_select
+ * value that is not a real option is rejected before it is saved. (Notion
+ * itself refuses a filter on an unknown option, which would otherwise leave
+ * the collection permanently empty.) A cached vocabulary that rejects a value
+ * is refreshed once first, so a tag added in Notion moments ago still passes.
+ */
+export async function validateCriteriaAgainstSchema(
+  criteria: CollectionCriteria,
+): Promise<CriteriaProblem[]> {
+  const known = (v: ManifestVocabulary) => ({
+    tags: v.tags,
+    source: v.source,
+    rights: v.rights,
+  });
+  const problems = validateCriteria(criteria, known(await manifestVocabulary()));
+  if (!problems.some((p) => p.message.includes("is not an existing"))) {
+    return problems;
+  }
+  return validateCriteria(criteria, known(await manifestVocabulary({ fresh: true })));
 }
 
 async function collectionsDataSourceId(): Promise<string> {
@@ -488,10 +529,10 @@ export async function createCollection(
   if (isSmart) {
     properties[COLLECTION_TYPE_PROP] = { select: { name: "smart" } };
     properties[COLLECTION_CRITERIA_PROP] = {
-      rich_text: [{ text: { content: JSON.stringify(criteria) } }],
+      rich_text: toRichTextSegments(JSON.stringify(criteria)),
     };
     properties[COLLECTION_SUMMARY_PROP] = {
-      rich_text: [{ text: { content: describeCriteria(criteria as CollectionCriteria) } }],
+      rich_text: toRichTextSegments(describeCriteria(criteria as CollectionCriteria)),
     };
   }
 
@@ -503,22 +544,40 @@ export async function createCollection(
   return { id: page.id };
 }
 
+/** Thrown when a rule is sent to a collection that is not a smart one. */
+export class NotSmartCollectionError extends Error {
+  constructor() {
+    super(
+      "This is a hand-picked collection. Rules can only be edited on smart " +
+        "collections; create a new smart collection instead.",
+    );
+    this.name = "NotSmartCollectionError";
+  }
+}
+
 /**
  * Replace a smart collection's rule. Also rewrites the human-readable summary
  * so the Notion view stays legible, and drops the cached evaluation.
+ *
+ * Refuses a manual collection: converting one would silently orphan its
+ * hand-picked `Assets` relation.
  */
 export async function updateCollectionCriteria(
   id: string,
   criteria: CollectionCriteria,
   name?: string,
 ): Promise<void> {
+  const page = (await notionRetry("collection retrieve", () =>
+    notion().pages.retrieve({ page_id: id }),
+  )) as any;
+  if (collectionKind(page) !== "smart") throw new NotSmartCollectionError();
+
   const properties: Record<string, unknown> = {
-    [COLLECTION_TYPE_PROP]: { select: { name: "smart" } },
     [COLLECTION_CRITERIA_PROP]: {
-      rich_text: [{ text: { content: JSON.stringify(criteria) } }],
+      rich_text: toRichTextSegments(JSON.stringify(criteria)),
     },
     [COLLECTION_SUMMARY_PROP]: {
-      rich_text: [{ text: { content: describeCriteria(criteria) } }],
+      rich_text: toRichTextSegments(describeCriteria(criteria)),
     },
   };
   if (name) {
@@ -649,13 +708,21 @@ export async function getCollection(id: string): Promise<Collection | null> {
     const summary = describeCriteria(criteria);
     try {
       const { items, truncated } = await resolveSmartCollection(id, criteria);
-      return { id, name, items, kind, criteria, summary, truncated };
+      return { id, name, items, kind, criteria, summary, truncated, evaluationError: null };
     } catch (err) {
       // A rule we can no longer compile (e.g. a property was renamed in Notion)
       // should degrade to an empty view with the reason logged, not take down
       // the whole collections page.
       console.error(`smart collection ${id} failed to evaluate`, err);
-      return { id, name, items: [], kind, criteria, summary, truncated: false };
+      // Carry the reason to the UI too, so an empty view is explained (e.g. a
+      // tag that was renamed or deleted in Notion) instead of looking empty.
+      // Notion appends every option name to an unknown-option error; keep
+      // just the part that says what is wrong.
+      const evaluationError =
+        err instanceof Error
+          ? err.message.split(". Available options:")[0]
+          : "This rule could not be evaluated.";
+      return { id, name, items: [], kind, criteria, summary, truncated: false, evaluationError };
     }
   }
 
@@ -670,5 +737,5 @@ export async function getCollection(id: string): Promise<Collection | null> {
     .filter((r): r is PromiseFulfilledResult<any> => r.status === "fulfilled")
     .map((r) => pageToAsset(r.value));
 
-  return { id, name, items, kind, criteria, summary: "", truncated: false };
+  return { id, name, items, kind, criteria, summary: "", truncated: false, evaluationError: null };
 }

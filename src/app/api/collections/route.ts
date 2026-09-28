@@ -1,8 +1,12 @@
 import { NextResponse } from "next/server";
 
 import { checkWriteAuth } from "@/lib/auth";
-import { normaliseCriteria, validateCriteria } from "@/lib/collectionCriteria";
-import { createCollection, listCollections } from "@/lib/notion";
+import { normaliseCriteria } from "@/lib/collectionCriteria";
+import {
+  createCollection,
+  listCollections,
+  validateCriteriaAgainstSchema,
+} from "@/lib/notion";
 
 export const dynamic = "force-dynamic";
 
@@ -41,7 +45,17 @@ export async function POST(request: Request) {
   const wantsSmart = body.criteria != null;
   if (wantsSmart) {
     const criteria = normaliseCriteria(body.criteria as any);
-    const problems = validateCriteria(criteria);
+    // Checked against the live schema, so a mistyped tag is refused here
+    // rather than saved as a collection that can never match anything.
+    let problems: Awaited<ReturnType<typeof validateCriteriaAgainstSchema>>;
+    try {
+      problems = await validateCriteriaAgainstSchema(criteria);
+    } catch (err) {
+      console.error("collection criteria validation failed", err);
+      const message =
+        err instanceof Error ? err.message : "Could not check the rule against Notion";
+      return NextResponse.json({ error: message }, { status: 502 });
+    }
     if (problems.length > 0) {
       return NextResponse.json(
         {

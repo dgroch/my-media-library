@@ -150,7 +150,9 @@ export const CRITERIA_OPS: Record<CriteriaOp, { label: string; arity: "none" | "
   isNot: { label: "is not", arity: "many" },
   contains: { label: "contains", arity: "one" },
   notContains: { label: "does not contain", arity: "one" },
-  equals: { label: "is exactly", arity: "one" },
+  // Notion's rich_text `equals` ignores case, so the label says so rather than
+  // promising an exact match.
+  equals: { label: "is (ignoring case)", arity: "one" },
   startsWith: { label: "starts with", arity: "one" },
   endsWith: { label: "ends with", arity: "one" },
   isEmpty: { label: "is empty", arity: "none" },
@@ -168,6 +170,9 @@ export interface CriteriaProblem {
 }
 
 const MAX_COMPOUND_DEPTH = 2;
+
+/** Notion's per-segment limit for a rich_text `text.content`. */
+const RICH_TEXT_SEGMENT_MAX = 2000;
 
 /** Trim, drop blanks, and de-duplicate while preserving order. */
 function cleanValues(values: unknown): string[] {
@@ -207,6 +212,13 @@ export function validateCriteria(
     // An empty rule set would match the entire library; refuse rather than
     // silently resolving to thousands of rows.
     problems.push({ ruleIndex: -1, message: "At least one rule is required." });
+    return problems;
+  }
+
+  // Notion stores the rule as rich_text: at most 100 segments of 2,000
+  // characters. Anything larger could never be saved.
+  if (JSON.stringify(c).length > 100 * RICH_TEXT_SEGMENT_MAX) {
+    problems.push({ ruleIndex: -1, message: "This rule is too large to save." });
     return problems;
   }
 
@@ -250,17 +262,21 @@ export function validateCriteria(
       problems.push({ ruleIndex: i, message: `"${op.label}" needs at least one value.` });
     }
 
-    // Option-name check for the enumerated property types.
+    // Option-name check for the enumerated property types. Exact match:
+    // Notion's option names are case-sensitive in filters, so "HIGH-FLORAL"
+    // would be refused at query time even though "high-floral" exists.
     const options = knownOptions?.[rule.field as CriteriaField];
     if (options && fs.type !== "rich_text") {
-      const lower = new Set(options.map((o) => o.toLowerCase()));
+      const exact = new Set(options);
       for (const v of values) {
-        if (!lower.has(v.toLowerCase())) {
-          problems.push({
-            ruleIndex: i,
-            message: `"${v}" is not an existing ${fs.label} option.`,
-          });
-        }
+        if (exact.has(v)) continue;
+        const near = options.find((o) => o.toLowerCase() === v.toLowerCase());
+        problems.push({
+          ruleIndex: i,
+          message: near
+            ? `"${v}" is not an existing ${fs.label} option. Did you mean "${near}"?`
+            : `"${v}" is not an existing ${fs.label} option.`,
+        });
       }
     }
   });
@@ -399,6 +415,9 @@ export function parseCriteria(raw: string | null | undefined): CollectionCriteri
   if (!parsed || typeof parsed !== "object") return null;
   const c = parsed as Partial<CollectionCriteria>;
   if (!Array.isArray(c.rules)) return null;
+  // Refuse a schema version this code does not understand rather than
+  // guessing at it. A missing `v` predates versioning and is read as 1.
+  if (c.v !== undefined && c.v !== 1) return null;
   return {
     v: 1,
     connector: c.connector === "or" ? "or" : "and",
@@ -435,4 +454,25 @@ export function normaliseCriteria(input: {
       }))
     : [];
   return { v: 1, connector, rules: rules as CriteriaRule[] };
+}
+
+/**
+ * Split a long string into rich_text segments Notion will accept. A single
+ * segment is capped at 2,000 characters, so a large rule stored as one segment
+ * would fail to save; reading joins the segments back (see `plainText`).
+ * Never splits a surrogate pair, so emoji and other astral characters survive.
+ */
+export function toRichTextSegments(
+  value: string,
+): Array<{ text: { content: string } }> {
+  const segments: Array<{ text: { content: string } }> = [];
+  let i = 0;
+  while (i < value.length) {
+    let end = Math.min(i + RICH_TEXT_SEGMENT_MAX, value.length);
+    const last = value.charCodeAt(end - 1);
+    if (end < value.length && last >= 0xd800 && last <= 0xdbff) end -= 1;
+    segments.push({ text: { content: value.slice(i, end) } });
+    i = end;
+  }
+  return segments;
 }

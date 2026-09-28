@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
 
+import { normaliseCriteria } from "@/lib/collectionCriteria";
 import {
-  normaliseCriteria,
-  validateCriteria,
-} from "@/lib/collectionCriteria";
-import { countCriteriaMatches } from "@/lib/notion";
+  countCriteriaMatches,
+  validateCriteriaAgainstSchema,
+} from "@/lib/notion";
 
 export const dynamic = "force-dynamic";
 
@@ -24,14 +24,15 @@ export async function POST(request: Request) {
   }
 
   const criteria = normaliseCriteria(body);
-  const problems = validateCriteria(criteria);
-  if (problems.length > 0) {
-    // A malformed rule is a normal state while the user is still typing, so
-    // this is a 200 with `problems` rather than an error status.
-    return NextResponse.json({ count: 0, truncated: false, problems });
-  }
 
   try {
+    const problems = await validateCriteriaAgainstSchema(criteria);
+    if (problems.length > 0) {
+      // A malformed rule is a normal state while the user is still typing, so
+      // this is a 200 with `problems` rather than an error status.
+      return NextResponse.json({ count: 0, truncated: false, problems });
+    }
+
     const { count, truncated } = await countCriteriaMatches(criteria);
     return NextResponse.json({ count, truncated, problems: [] });
   } catch (err) {
