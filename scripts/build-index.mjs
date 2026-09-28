@@ -421,6 +421,9 @@ function toRecord(page) {
   const source = plainText(p["Source"]);
   const tags = readTags(p["Tags"]);
   const phash = plainText(p["pHash"]);
+  // Content hash — carried so the grid can address a cached thumbnail without
+  // a Notion round trip per tile.
+  const sha256 = plainText(p["SHA256"]);
 
   const lines = [title];
   if (context) lines.push(`Context: ${context}`);
@@ -444,6 +447,7 @@ function toRecord(page) {
     driveFileId,
     dimensions: pixelDimensions,
     cdnIsOriginal,
+    sha256,
     mediaType,
     context,
     people,
@@ -582,7 +586,7 @@ async function main() {
       const { text, ...rest } = r; // metadata only — no vector in the JSON
       // Drop empty human-channel fields so the meta file doesn't bloat for
       // the (initially vast) majority of rows without them.
-      for (const key of ["context", "people", "product", "location", "source", "tags", "phash", "dimensions"]) {
+      for (const key of ["context", "people", "product", "location", "source", "tags", "phash", "dimensions", "sha256"]) {
         const v = rest[key];
         if (v === "" || (Array.isArray(v) && v.length === 0)) delete rest[key];
       }

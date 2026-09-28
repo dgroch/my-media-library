@@ -53,6 +53,21 @@ Agents  ──▶ /openapi.json ──▶ discover + call the JSON API above
   visible **"⤢ Original on Drive · WxH"** badge, because the hover-only ↗ was
   too easy to miss — which is how people ended up using previews as if they
   were originals.
+- **Grid tiles never load a full-resolution original.** Because uploaded rows
+  put the original at `Preview URL`, rendering a grid straight from it meant a
+  large collection pulled hundreds of MB — a 276-asset collection measured
+  ~1 GB, with `ERR_INSUFFICIENT_RESOURCES` in the browser. `GET
+  /api/thumb/{sha256}` (`src/app/api/thumb/[sha]/route.ts`, chosen by
+  `src/lib/thumbs.ts`) serves a 640px WebP instead: ~48 KB against a ~3.7 MB
+  original, roughly a 79x reduction. Renditions are content-addressed by the
+  row's `SHA256` and cached in the derived-objects tier, so a warm tile is
+  served by the CDN edge and never reaches this server; `R2_*` must be
+  configured for the cache to work, otherwise each request re-renders. Only
+  rows where `cdnIsOriginal` is true take this path — Drive-synced rows already
+  point at a downscaled preview and keep using `url` directly. A row with no
+  `SHA256` also falls back to `url`, so a heavier tile is preferred to a broken
+  one. `url` remains the full-resolution file and is what `/a/{id}` and the
+  "open the original" links use — the grid is the only place this applies.
 - **Drive mirror.** Uploaded originals are also pushed to a Google Drive folder
   (`src/lib/drive.ts`, service-account auth, `GOOGLE_DRIVE_*` env), so app
   uploads are browsable next to the legacy corpus. This is a **backup, not a

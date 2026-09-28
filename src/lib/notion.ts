@@ -315,6 +315,9 @@ function pageToAsset(page: any): Asset {
     // Only app uploads carry `Uploaded At`, and only app uploads store the
     // untouched original at `url` — see Asset.cdnIsOriginal.
     cdnIsOriginal: Boolean(p[humanProps.uploadedAt]?.date?.start),
+    // Written by the upload path for dedup; also the cache key for grid
+    // thumbnails, so it travels with the asset.
+    sha256: plainText(p[humanProps.sha256]),
     mediaType: detectMediaType(
       title,
       plainText(p[props.mimeType]),

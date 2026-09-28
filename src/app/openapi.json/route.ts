@@ -395,6 +395,44 @@ export async function GET(request: Request) {
           },
         },
       },
+      "/api/thumb/{sha256}": {
+        get: {
+          operationId: "assetThumbnail",
+          summary: "Grid-sized rendition of an asset",
+          description:
+            "Returns a 640px WebP rendition of the asset whose `SHA256` matches, " +
+            "generated on demand and then served from an immutable edge cache. " +
+            "Intended for grids: on uploaded rows `url` is the untouched original " +
+            "(often ~2000x3000 and several MB), so a large collection rendered " +
+            "from `url` pulls hundreds of MB. Use this for tiles and `url` for " +
+            "full resolution. Drive-synced rows already have small previews and " +
+            "need no rendition.",
+          parameters: [
+            {
+              name: "sha256",
+              in: "path",
+              required: true,
+              description:
+                "The asset's `sha256` — a 64-character hex SHA-256 digest.",
+              schema: { type: "string" },
+            },
+          ],
+          responses: {
+            "200": {
+              description: "The rendition as image/webp.",
+              content: { "image/webp": { schema: { type: "string", format: "binary" } } },
+            },
+            "302": {
+              description:
+                "Redirect to the original, when no rendition can be produced " +
+                "(e.g. an unsupported format). Clients should follow redirects.",
+            },
+            "404": {
+              description: "No asset with that hash, or it has no public preview.",
+            },
+          },
+        },
+      },
       "/api/search": {
         get: {
           operationId: "searchAssets",
@@ -835,6 +873,7 @@ export async function GET(request: Request) {
             "driveLink",
             "dimensions",
             "cdnIsOriginal",
+            "sha256",
           ],
           properties: {
             id: { type: "string", description: "Notion page id of the asset." },
@@ -863,6 +902,11 @@ export async function GET(request: Request) {
               type: "boolean",
               description:
                 "True when `url` is itself the untouched original (an app upload). False for Drive-synced rows, where `url` is a downscaled preview. Uploads are mirrored to Drive, so `driveLink` alone does not distinguish them.",
+            },
+            sha256: {
+              type: "string",
+              description:
+                "SHA-256 of the original bytes, or empty. Content-addressed key for the grid rendition at `/api/thumb/{sha256}`, which returns a 640px WebP. Use that for thumbnails and `url` for full resolution.",
             },
           },
         },
