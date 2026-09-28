@@ -8,6 +8,7 @@ import {
   originalTitle,
   previewIsDownscaled,
 } from "@/lib/original";
+import { thumbUrl } from "@/lib/thumbs";
 import type { Asset } from "@/lib/types";
 
 interface Props {
@@ -102,7 +103,9 @@ export default function AssetCard({
       {hasImage ? (
         // eslint-disable-next-line @next/next/no-img-element
         <img
-          src={asset.url}
+          // Grid tiles never pull a full-resolution original: uploads render
+          // from a cached 640px rendition. See lib/thumbs.ts.
+          src={thumbUrl(asset)}
           alt={asset.description || asset.title}
           loading="lazy"
         />

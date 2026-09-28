@@ -36,6 +36,13 @@ export interface Asset {
    * longer tell the two apart.
    */
   cdnIsOriginal: boolean;
+  /**
+   * Content hash of the original (the Manifest's `SHA256`), or "" when the row
+   * has none. Grid tiles use it to address a cached thumbnail — see
+   * `thumbUrl` in `lib/thumbs.ts` — which is what keeps a 276-asset collection
+   * from pulling ~1 GB of full-resolution originals.
+   */
+  sha256: string;
 }
 
 export interface SearchResponse {

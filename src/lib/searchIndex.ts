@@ -32,6 +32,9 @@ interface MetaRecord {
   driveLink: string;
   dimensions?: string;
   cdnIsOriginal?: boolean;
+  /** Content hash, used as the grid-thumbnail cache key. Absent in indexes
+   *  built before it was recorded, which just means no thumbnail. */
+  sha256?: string;
   createdTime: string;
   // Human-context fields (present once build-index has seen uploaded rows).
   context?: string;
@@ -152,6 +155,7 @@ function buildLoadedIndex(meta: MetaFile, buf: Buffer): LoadedIndex | null {
     driveLink: a.driveLink,
     dimensions: a.dimensions ?? "",
     cdnIsOriginal: a.cdnIsOriginal ?? false,
+    sha256: a.sha256 ?? "",
   }));
   const human: HumanMeta[] = meta.assets.map((a) => ({
     context: a.context ?? "",
@@ -318,6 +322,7 @@ export function upsertRuntimeAsset(
       driveLink: entry.driveLink,
       dimensions: entry.dimensions,
       cdnIsOriginal: entry.cdnIsOriginal,
+      sha256: entry.sha256,
     },
     human: humanMetaOf(entry),
     phash: entry.phash || prev?.phash || "",
