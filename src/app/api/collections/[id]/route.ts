@@ -1,10 +1,14 @@
 import { NextResponse } from "next/server";
 
 import { checkWriteAuth } from "@/lib/auth";
+import { normaliseCriteria } from "@/lib/collectionCriteria";
 import {
   deleteCollection,
   getCollection,
+  NotSmartCollectionError,
   renameCollection,
+  updateCollectionCriteria,
+  validateCriteriaAgainstSchema,
 } from "@/lib/notion";
 
 export const dynamic = "force-dynamic";
@@ -32,7 +36,8 @@ export async function GET(
   }
 }
 
-// Rename a collection. Same optional bearer-token gate as POST /api/collections.
+// Rename a collection, or replace a smart collection's rule. Same optional
+// bearer-token gate as POST /api/collections.
 export async function PATCH(
   request: Request,
   { params }: { params: Promise<{ id: string }> },
@@ -44,11 +49,54 @@ export async function PATCH(
 
   const { id } = await params;
 
-  let body: { name?: unknown };
+  let body: { name?: unknown; criteria?: unknown };
   try {
     body = await request.json();
   } catch {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
+
+  // Editing a rule: validate before writing so a bad rule never reaches Notion.
+  if (body.criteria != null) {
+    const criteria = normaliseCriteria(body.criteria as any);
+    let problems: Awaited<ReturnType<typeof validateCriteriaAgainstSchema>>;
+    try {
+      problems = await validateCriteriaAgainstSchema(criteria);
+    } catch (err) {
+      console.error("collection criteria validation failed", err);
+      const message =
+        err instanceof Error ? err.message : "Could not check the rule against Notion";
+      return NextResponse.json({ error: message }, { status: 502 });
+    }
+    if (problems.length > 0) {
+      return NextResponse.json(
+        {
+          error:
+            "Invalid collection criteria: " +
+            problems
+              .map((p) =>
+                p.ruleIndex >= 0 ? `rule ${p.ruleIndex + 1}: ${p.message}` : p.message,
+              )
+              .join("; "),
+          problems,
+        },
+        { status: 400 },
+      );
+    }
+    const name = typeof body.name === "string" ? body.name.trim() : "";
+
+    try {
+      await updateCollectionCriteria(id, criteria, name || undefined);
+      return NextResponse.json({ id, criteria });
+    } catch (err) {
+      if (err instanceof NotSmartCollectionError) {
+        return NextResponse.json({ error: err.message }, { status: 409 });
+      }
+      console.error("update collection criteria failed", err);
+      const message =
+        err instanceof Error ? err.message : "Failed to update criteria";
+      return NextResponse.json({ error: message }, { status: 500 });
+    }
   }
 
   const name = typeof body.name === "string" ? body.name.trim() : "";

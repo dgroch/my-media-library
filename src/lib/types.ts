@@ -1,6 +1,10 @@
 // Shared shapes used across the API, server components and client components.
 
 import type { MediaType } from "./media";
+import type { CollectionCriteria } from "./collectionCriteria";
+
+/** How a collection decides its members. */
+export type CollectionKind = "manual" | "smart";
 
 export interface Asset {
   /** Notion page id of the asset row. */
@@ -48,12 +52,38 @@ export interface Collection {
   id: string;
   name: string;
   items: Asset[];
+  /**
+   * "manual" collections hold a fixed relation list; "smart" ones re-evaluate
+   * their stored rule on every read, so members appear and disappear as the
+   * Manifest changes. Rows created before the feature has no `Type` value and
+   * are read as "manual".
+   */
+  kind: CollectionKind;
+  /** The rule, for smart collections only. */
+  criteria: CollectionCriteria | null;
+  /**
+   * Human-readable rendering of `criteria` (e.g. `Tags has all of "a", "b"`).
+   * Computed server-side so the client never needs the property-name config,
+   * and so it matches what Notion shows in `Rule Summary`.
+   */
+  summary: string;
+  /**
+   * True when a smart rule matched more assets than the per-view cap, so
+   * `items` is a prefix rather than the whole set.
+   */
+  truncated: boolean;
+  /**
+   * Why a smart rule could not be evaluated (e.g. a tag was renamed or deleted
+   * in Notion), so the UI can explain an empty view. Null when it evaluated.
+   */
+  evaluationError: string | null;
 }
 
 /** Lightweight collection metadata for list/index views (no asset rows). */
 export interface CollectionSummary {
   id: string;
   name: string;
+  kind: CollectionKind;
   /** Number of linked assets. Capped/partial when `partialCount` is true. */
   assetCount: number;
   /** True when the real count exceeds what a single query page returned. */

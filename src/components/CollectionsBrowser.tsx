@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Collection, CollectionSummary } from "@/lib/types";
 
 import MasonryGrid from "./MasonryGrid";
+import SmartCollectionBuilder from "./SmartCollectionBuilder";
 
 interface Props {
   collections: CollectionSummary[];
@@ -45,6 +46,10 @@ export default function CollectionsBrowser({
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+
+  // Rule builder: closed, creating new, or editing the selected collection.
+  const [builderOpen, setBuilderOpen] = useState(false);
+  const [editingRule, setEditingRule] = useState(false);
 
   // Cache fetched collections so re-selecting one is instant.
   const cache = useRef<Map<string, Collection>>(new Map());
@@ -197,6 +202,16 @@ export default function CollectionsBrowser({
   return (
     <div className="browser">
       <aside className="browser-aside">
+        <button
+          type="button"
+          className="btn btn-primary new-smart-btn"
+          onClick={() => {
+            setEditingRule(false);
+            setBuilderOpen(true);
+          }}
+        >
+          + New smart collection
+        </button>
         <input
           className="search-input"
           placeholder="Filter collections…"
@@ -211,8 +226,8 @@ export default function CollectionsBrowser({
 
         {list.length === 0 ? (
           <div className="notice">
-            No collections left. Run a search, select some assets, and save a
-            collection to see it here.
+            No collections yet. Create a smart collection from a rule above, or
+            run a search, select some assets, and save a hand-picked one.
           </div>
         ) : filtered.length === 0 ? (
           <div className="notice">No collections match “{filter}”.</div>
@@ -232,12 +247,28 @@ export default function CollectionsBrowser({
                   onClick={() => load(c.id)}
                   aria-current={c.id === selectedId}
                 >
-                  <span className="collection-list-name">{c.name}</span>
+                  <span className="collection-list-name">
+                    {c.name}
+                    {c.kind === "smart" && (
+                      <span className="badge-smart" title="Updates itself from a rule">
+                        smart
+                      </span>
+                    )}
+                  </span>
                   <span className="collection-list-meta">
-                    {c.assetCount}
-                    {c.partialCount ? "+" : ""}{" "}
-                    {c.assetCount === 1 ? "asset" : "assets"}
-                    {c.createdTime && <> · {formatDate(c.createdTime)}</>}
+                    {c.kind === "smart" ? (
+                      // A smart collection's relation is intentionally empty —
+                      // its real size is only known by evaluating the rule, so
+                      // showing "0 assets" here would be actively misleading.
+                      <>rule-based · {formatDate(c.createdTime)}</>
+                    ) : (
+                      <>
+                        {c.assetCount}
+                        {c.partialCount ? "+" : ""}{" "}
+                        {c.assetCount === 1 ? "asset" : "assets"}
+                        {c.createdTime && <> · {formatDate(c.createdTime)}</>}
+                      </>
+                    )}
                   </span>
                 </button>
               </li>
@@ -289,15 +320,51 @@ export default function CollectionsBrowser({
                   <>
                     <h1 className="page-title">{detail.name}</h1>
                     <p className="page-sub">
-                      {detail.items.length}{" "}
+                      {detail.items.length}
+                      {detail.truncated ? "+" : ""}{" "}
                       {detail.items.length === 1 ? "asset" : "assets"}
+                      {detail.kind === "smart" && " · updates automatically"}
                     </p>
+                    {detail.kind === "smart" && detail.summary && (
+                      <p className="rule-summary">
+                        Match{" "}
+                        {detail.criteria?.connector === "or" ? "any" : "all"}:{" "}
+                        {detail.summary}
+                      </p>
+                    )}
+                    {detail.evaluationError && (
+                      <div className="notice error">
+                        This rule could not be run, so nothing is shown. A tag
+                        or option it uses may have been renamed or removed in
+                        Notion. Edit the rule to fix it.
+                        <br />
+                        <span className="muted">{detail.evaluationError}</span>
+                      </div>
+                    )}
+                    {detail.truncated && (
+                      <div className="notice">
+                        Showing the first {detail.items.length} matches — this
+                        rule matches more. Narrow it if you need the full set.
+                      </div>
+                    )}
                   </>
                 )}
               </div>
 
               {!renaming && (
                 <div className="head-actions">
+                  {detail.kind === "smart" && detail.criteria && (
+                    <button
+                      className="btn"
+                      onClick={() => {
+                        setActionError(null);
+                        setEditingRule(true);
+                        setBuilderOpen(true);
+                      }}
+                    >
+                      Edit rule
+                    </button>
+                  )}
                   <button className="btn" onClick={startRename}>
                     Rename
                   </button>
@@ -371,6 +438,39 @@ export default function CollectionsBrowser({
             </div>
           </div>
         </div>
+      )}
+      {builderOpen && (
+        <SmartCollectionBuilder
+          initial={
+            editingRule && detail && detail.criteria
+              ? {
+                  id: detail.id,
+                  name: detail.name,
+                  connector: detail.criteria.connector,
+                  rules: detail.criteria.rules.map((r) => ({
+                    field: r.field,
+                    op: r.op,
+                    values: r.values,
+                  })),
+                }
+              : undefined
+          }
+          onClose={() => setBuilderOpen(false)}
+          onSaved={async (id) => {
+            setBuilderOpen(false);
+            setEditingRule(false);
+            // Re-read the list so a new smart collection picks up its badge.
+            try {
+              const res = await fetch("/api/collections");
+              const data = await res.json();
+              if (res.ok) setList(data.collections ?? []);
+            } catch {
+              /* keep the current list; the detail load below still runs */
+            }
+            cache.current.delete(id);
+            load(id);
+          }}
+        />
       )}
     </div>
   );

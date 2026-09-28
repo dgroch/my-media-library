@@ -43,15 +43,9 @@ export default async function CollectionsPage({ searchParams }: PageProps) {
               Couldn&rsquo;t load collections. Check that the Collections
               database is configured.
             </div>
-          ) : collections.length === 0 ? (
-            <>
-              <h1 className="page-title">Collections</h1>
-              <div className="notice">
-                No collections yet. Run a search, select some assets, and save a
-                collection to see it here.
-              </div>
-            </>
           ) : (
+            /* Render the browser even with zero collections, so the
+               "New smart collection" entry point is always reachable. */
             <CollectionsBrowser
               collections={collections}
               initialSelectedId={c}

@@ -221,6 +221,14 @@ export const driveConfig = {
 // The relation property on the Collections database that links to assets.
 export const COLLECTION_ASSETS_PROP = "Assets";
 export const COLLECTION_NAME_PROP = "Name";
+// Smart collections (rule-based) store their rule as JSON in a rich_text
+// property, and a `Type` select that distinguishes them from hand-picked ones.
+// Added by `npm run setup:smart-collections`. A collection whose Type is empty
+// is treated as "manual", so rows created before this feature keep working.
+export const COLLECTION_TYPE_PROP = "Type";
+export const COLLECTION_CRITERIA_PROP = "Criteria";
+export const COLLECTION_SUMMARY_PROP = "Rule Summary";
+export type CollectionKind = "manual" | "smart";
 
 // ---------------------------------------------------------------------------
 // Semantic search (embeddings)
