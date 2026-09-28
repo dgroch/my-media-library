@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "next lint",
     "setup:collections": "node scripts/setup-collections.mjs",
+    "setup:smart-collections": "node scripts/setup-smart-collections.mjs",
     "setup:upload": "node scripts/setup-upload.mjs",
     "convert:multiselect": "node scripts/convert-multiselect.mjs",
     "check:drive": "node --conditions=react-server --import tsx scripts/check-drive.mts",

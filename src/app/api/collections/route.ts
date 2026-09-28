@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { checkWriteAuth } from "@/lib/auth";
+import { normaliseCriteria, validateCriteria } from "@/lib/collectionCriteria";
 import { createCollection, listCollections } from "@/lib/notion";
 
 export const dynamic = "force-dynamic";
@@ -23,7 +24,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: denied.error }, { status: denied.status });
   }
 
-  let body: { name?: string; assetIds?: unknown };
+  let body: { name?: string; assetIds?: unknown; criteria?: unknown };
   try {
     body = await request.json();
   } catch {
@@ -34,6 +35,39 @@ export async function POST(request: Request) {
   const assetIds = Array.isArray(body.assetIds)
     ? body.assetIds.filter((id): id is string => typeof id === "string")
     : [];
+
+  // Two ways to create a collection: a fixed list of asset ids (the original
+  // behaviour) or a rule that is re-evaluated on every read.
+  const wantsSmart = body.criteria != null;
+  if (wantsSmart) {
+    const criteria = normaliseCriteria(body.criteria as any);
+    const problems = validateCriteria(criteria);
+    if (problems.length > 0) {
+      return NextResponse.json(
+        {
+          error:
+            "Invalid collection criteria: " +
+            problems
+              .map((p) =>
+                p.ruleIndex >= 0 ? `rule ${p.ruleIndex + 1}: ${p.message}` : p.message,
+              )
+              .join("; "),
+          problems,
+        },
+        { status: 400 },
+      );
+    }
+
+    try {
+      const { id } = await createCollection(name, [], criteria);
+      return NextResponse.json({ id });
+    } catch (err) {
+      console.error("create smart collection failed", err);
+      const message =
+        err instanceof Error ? err.message : "Failed to create collection";
+      return NextResponse.json({ error: message }, { status: 500 });
+    }
+  }
 
   if (assetIds.length === 0) {
     return NextResponse.json(

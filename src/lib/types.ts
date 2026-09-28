@@ -1,6 +1,10 @@
 // Shared shapes used across the API, server components and client components.
 
 import type { MediaType } from "./media";
+import type { CollectionCriteria } from "./collectionCriteria";
+
+/** How a collection decides its members. */
+export type CollectionKind = "manual" | "smart";
 
 export interface Asset {
   /** Notion page id of the asset row. */
@@ -48,12 +52,27 @@ export interface Collection {
   id: string;
   name: string;
   items: Asset[];
+  /**
+   * "manual" collections hold a fixed relation list; "smart" ones re-evaluate
+   * their stored rule on every read, so members appear and disappear as the
+   * Manifest changes. Rows created before the feature has no `Type` value and
+   * are read as "manual".
+   */
+  kind: CollectionKind;
+  /** The rule, for smart collections only. */
+  criteria: CollectionCriteria | null;
+  /**
+   * True when a smart rule matched more assets than the per-view cap, so
+   * `items` is a prefix rather than the whole set.
+   */
+  truncated: boolean;
 }
 
 /** Lightweight collection metadata for list/index views (no asset rows). */
 export interface CollectionSummary {
   id: string;
   name: string;
+  kind: CollectionKind;
   /** Number of linked assets. Capped/partial when `partialCount` is true. */
   assetCount: number;
   /** True when the real count exceeds what a single query page returned. */

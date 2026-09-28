@@ -4,17 +4,27 @@ import { Client } from "@notionhq/client";
 
 import {
   COLLECTION_ASSETS_PROP,
+  COLLECTION_CRITERIA_PROP,
   COLLECTION_NAME_PROP,
+  COLLECTION_SUMMARY_PROP,
+  COLLECTION_TYPE_PROP,
   humanKeywordProps,
   humanProps,
   notionConfig,
   props,
   keywordTextProps,
 } from "./config";
+import {
+  compileCriteria,
+  describeCriteria,
+  parseCriteria,
+  type CollectionCriteria,
+} from "./collectionCriteria";
 import { detectMediaType } from "./media";
 import type {
   Asset,
   Collection,
+  CollectionKind,
   CollectionSummary,
   SearchResponse,
 } from "./types";
@@ -171,6 +181,52 @@ if (
   });
 }
 
+/**
+ * The option vocabulary for the rule builder, read from the Manifest data
+ * source's schema. Notion already stores every multi_select/select option
+ * there, so this needs no extra scan of the assets — at the cost of possibly
+ * offering an option that no asset currently uses, which is why the builder
+ * also shows a live match count per rule.
+ */
+export interface ManifestVocabulary {
+  tags: string[];
+  source: string[];
+  rights: string[];
+}
+
+let cachedVocabulary: ManifestVocabulary | null = null;
+
+export async function manifestVocabulary(): Promise<ManifestVocabulary> {
+  if (cachedVocabulary) return cachedVocabulary;
+
+  const dataSourceId = await assetsDataSourceId();
+  const ds = (await notionRetry("manifest vocabulary retrieve", () =>
+    notion().dataSources.retrieve({ data_source_id: dataSourceId }),
+  )) as unknown as {
+    properties?: Record<string, { type: string; [k: string]: unknown }>;
+  };
+
+  const optionsFor = (name: string, type: "multi_select" | "select"): string[] => {
+    const def = ds.properties?.[name];
+    if (!def || def.type !== type) return [];
+    const list = (def[type] as { options?: Array<{ name?: string }> } | undefined)
+      ?.options;
+    return (list ?? [])
+      .map((o) => o?.name)
+      .filter((n): n is string => Boolean(n));
+  };
+
+  cachedVocabulary = {
+    // Sorted so the picker is browsable rather than schema-insertion order.
+    tags: optionsFor(humanProps.tags, "multi_select").sort((a, b) =>
+      a.localeCompare(b),
+    ),
+    source: optionsFor(humanProps.source, "select"),
+    rights: optionsFor(humanProps.rights, "select"),
+  };
+  return cachedVocabulary;
+}
+
 async function collectionsDataSourceId(): Promise<string> {
   if (!cachedCollectionsDataSourceId) {
     if (!notionConfig.collectionsDatabaseId) {
@@ -288,24 +344,189 @@ export async function searchAssets(
 // Collections
 // ---------------------------------------------------------------------------
 
+/**
+ * How many assets one smart collection will resolve per view. A broad rule
+ * ("Match any" on a common tag) would otherwise page through the whole
+ * Manifest on every render; past this the result is marked truncated.
+ */
+const SMART_COLLECTION_MAX = Number(
+  process.env.SMART_COLLECTION_MAX ?? "500",
+);
+
+/**
+ * How long a resolved smart collection is reused. Live means "current", not
+ * "re-queried on every render" — a short window keeps repeat views cheap while
+ * still picking up new assets quickly.
+ */
+const SMART_COLLECTION_CACHE_MS = Number(
+  process.env.SMART_COLLECTION_CACHE_MS ?? "60000",
+);
+
+interface SmartCacheEntry {
+  at: number;
+  /** Serialised criteria this entry was computed for, so an edit invalidates. */
+  key: string;
+  items: Asset[];
+  truncated: boolean;
+}
+
+const smartCache = new Map<string, SmartCacheEntry>();
+
+/** Drop a cached evaluation — called when a smart collection is edited. */
+export function invalidateSmartCollection(id: string): void {
+  smartCache.delete(id);
+}
+
+function collectionKind(page: any): CollectionKind {
+  return plainText(page.properties?.[COLLECTION_TYPE_PROP]) === "smart"
+    ? "smart"
+    : "manual";
+}
+
+function collectionCriteria(page: any): CollectionCriteria | null {
+  return parseCriteria(plainText(page.properties?.[COLLECTION_CRITERIA_PROP]));
+}
+
+/**
+ * Evaluate a smart rule by querying the Manifest through the compiled Notion
+ * filter, paging until the cap is reached. Results are cached briefly so a
+ * render pass does not re-query.
+ */
+async function queryByCriteria(
+  criteria: CollectionCriteria,
+): Promise<{ items: Asset[]; truncated: boolean }> {
+  // Throws with a readable message on an invalid rule, rather than silently
+  // resolving to "no filter" (which would mean the entire Manifest).
+  const filter = compileCriteria(criteria);
+  const dataSourceId = await assetsDataSourceId();
+
+  const items: Asset[] = [];
+  let cursor: string | undefined;
+  let truncated = false;
+
+  do {
+    const response = (await notionRetry("smart collection query", () =>
+      notion().dataSources.query({
+        data_source_id: dataSourceId,
+        // Our compiler emits plain Notion filter JSON; the SDK models it as a
+        // closed union, so the object is asserted at this boundary.
+        filter: filter as any,
+        sorts: [{ timestamp: "created_time", direction: "descending" }],
+        page_size: Math.min(100, SMART_COLLECTION_MAX - items.length),
+        ...(cursor ? { start_cursor: cursor } : {}),
+      }),
+    )) as any;
+
+    for (const page of response.results ?? []) {
+      if (page.archived || page.in_trash) continue;
+      items.push(pageToAsset(page));
+      if (items.length >= SMART_COLLECTION_MAX) break;
+    }
+
+    if (items.length >= SMART_COLLECTION_MAX) {
+      // Cap reached. `has_more` is not consulted past this point on purpose:
+      // we have everything we are willing to render.
+      truncated = Boolean(response.has_more) || items.length > SMART_COLLECTION_MAX;
+      cursor = undefined;
+    } else {
+      cursor = response.has_more ? response.next_cursor : undefined;
+    }
+  } while (cursor);
+
+  return { items: items.slice(0, SMART_COLLECTION_MAX), truncated };
+}
+
+/**
+ * Cached evaluation for a stored smart collection. The cache is keyed by both
+ * the collection id and the serialised rule, so editing a rule invalidates it
+ * even before the explicit invalidate call.
+ */
+async function resolveSmartCollection(
+  id: string,
+  criteria: CollectionCriteria,
+): Promise<{ items: Asset[]; truncated: boolean }> {
+  const key = JSON.stringify(criteria);
+  const hit = smartCache.get(id);
+  if (hit && hit.key === key && Date.now() - hit.at < SMART_COLLECTION_CACHE_MS) {
+    return { items: hit.items, truncated: hit.truncated };
+  }
+  const { items, truncated } = await queryByCriteria(criteria);
+  smartCache.set(id, { at: Date.now(), key, items, truncated });
+  return { items, truncated };
+}
+
+/**
+ * Count the assets a rule matches, for the builder's live preview. Bounded by
+ * the same cap as evaluation, so a `truncated` result means "at least this
+ * many" rather than an exact total.
+ */
+export async function countCriteriaMatches(
+  criteria: CollectionCriteria,
+): Promise<{ count: number; truncated: boolean }> {
+  const { items, truncated } = await queryByCriteria(criteria);
+  return { count: items.length, truncated };
+}
+
 export async function createCollection(
   name: string,
   assetIds: string[],
+  criteria?: CollectionCriteria | null,
 ): Promise<{ id: string }> {
   const dataSourceId = await collectionsDataSourceId();
+  const isSmart = Boolean(criteria);
+
+  const properties: Record<string, unknown> = {
+    [COLLECTION_NAME_PROP]: {
+      title: [{ text: { content: name || "Untitled collection" } }],
+    },
+    [COLLECTION_ASSETS_PROP]: {
+      // A smart collection derives its members; the relation stays empty.
+      relation: isSmart ? [] : assetIds.map((id) => ({ id })),
+    },
+  };
+
+  if (isSmart) {
+    properties[COLLECTION_TYPE_PROP] = { select: { name: "smart" } };
+    properties[COLLECTION_CRITERIA_PROP] = {
+      rich_text: [{ text: { content: JSON.stringify(criteria) } }],
+    };
+    properties[COLLECTION_SUMMARY_PROP] = {
+      rich_text: [{ text: { content: describeCriteria(criteria as CollectionCriteria) } }],
+    };
+  }
+
   const page = (await notion().pages.create({
     parent: { type: "data_source_id", data_source_id: dataSourceId },
-    properties: {
-      [COLLECTION_NAME_PROP]: {
-        title: [{ text: { content: name || "Untitled collection" } }],
-      },
-      [COLLECTION_ASSETS_PROP]: {
-        relation: assetIds.map((id) => ({ id })),
-      },
-    },
+    properties,
   } as any)) as any;
 
   return { id: page.id };
+}
+
+/**
+ * Replace a smart collection's rule. Also rewrites the human-readable summary
+ * so the Notion view stays legible, and drops the cached evaluation.
+ */
+export async function updateCollectionCriteria(
+  id: string,
+  criteria: CollectionCriteria,
+  name?: string,
+): Promise<void> {
+  const properties: Record<string, unknown> = {
+    [COLLECTION_TYPE_PROP]: { select: { name: "smart" } },
+    [COLLECTION_CRITERIA_PROP]: {
+      rich_text: [{ text: { content: JSON.stringify(criteria) } }],
+    },
+    [COLLECTION_SUMMARY_PROP]: {
+      rich_text: [{ text: { content: describeCriteria(criteria) } }],
+    },
+  };
+  if (name) {
+    properties[COLLECTION_NAME_PROP] = { title: [{ text: { content: name } }] };
+  }
+
+  await notion().pages.update({ page_id: id, properties } as any);
+  invalidateSmartCollection(id);
 }
 
 /**
@@ -332,6 +553,10 @@ export async function listCollections(
       return {
         id: page.id,
         name: plainText(page.properties?.[COLLECTION_NAME_PROP]) || "Collection",
+        kind: collectionKind(page),
+        // For a smart collection this relation is intentionally empty; the
+        // real count is only known by evaluating the rule, which the list view
+        // deliberately does not do (it would mean a query per row).
         assetCount: relations.length,
         partialCount: Boolean(rel?.has_more),
         createdTime: page.created_time ?? "",
@@ -413,6 +638,24 @@ export async function getCollection(id: string): Promise<Collection | null> {
 
   const name =
     plainText(page.properties?.[COLLECTION_NAME_PROP]) || "Collection";
+  const kind = collectionKind(page);
+  const criteria = collectionCriteria(page);
+
+  // A smart collection re-evaluates its rule against the current Manifest, so
+  // its membership tracks new and edited assets without anyone re-saving it.
+  if (kind === "smart" && criteria) {
+    try {
+      const { items, truncated } = await resolveSmartCollection(id, criteria);
+      return { id, name, items, kind, criteria, truncated };
+    } catch (err) {
+      // A rule we can no longer compile (e.g. a property was renamed in Notion)
+      // should degrade to an empty view with the reason logged, not take down
+      // the whole collections page.
+      console.error(`smart collection ${id} failed to evaluate`, err);
+      return { id, name, items: [], kind, criteria, truncated: false };
+    }
+  }
+
   const ids = await relationIds(page);
 
   // Fetch the related asset rows in parallel. Missing/deleted assets are
@@ -424,5 +667,5 @@ export async function getCollection(id: string): Promise<Collection | null> {
     .filter((r): r is PromiseFulfilledResult<any> => r.status === "fulfilled")
     .map((r) => pageToAsset(r.value));
 
-  return { id, name, items };
+  return { id, name, items, kind, criteria, truncated: false };
 }
