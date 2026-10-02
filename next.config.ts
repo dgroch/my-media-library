@@ -1,6 +1,14 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // This internal library must not appear in search results. Apply to pages,
+  // API responses, static assets and errors, including the Render origin.
+  async headers() {
+    return [{
+      source: "/:path*",
+      headers: [{ key: "X-Robots-Tag", value: "noindex, nofollow" }],
+    }];
+  },
   // The video pipeline shells out to the bundled static ffmpeg/ffprobe binaries.
   // These packages resolve their binary path relative to their own __dirname, so
   // they must stay external (unbundled) or the path breaks at runtime.
